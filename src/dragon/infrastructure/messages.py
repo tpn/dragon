@@ -1398,13 +1398,27 @@ class DDRegisterClient(CapNProtoMsg):
 class DDRegisterClientResponse(CapNProtoResponseMsg):
     _tc = MessageTypes.DD_REGISTER_CLIENT_RESPONSE
 
-    def __init__(self, tag, ref, err, clientID, numManagers, managerID, managerNodes, name, timeout, errInfo=""):
+    def __init__(
+        self,
+        tag,
+        ref,
+        err,
+        clientID,
+        numManagers,
+        managerID,
+        managerNodes,
+        name,
+        timeout,
+        waitForKeys=False,
+        errInfo="",
+    ):
         super().__init__(tag, ref, err, errInfo)
         self._clientID = clientID
         self._num_managers = numManagers
         self._managerID = managerID
         self._managerNodes = managerNodes
         self._name = name
+        self._waitForKeys = waitForKeys
         # The timeout conversion is needed for capnproto.
         if timeout is None:
             timeout = NO_TIMEOUT_VALUE
@@ -1417,6 +1431,7 @@ class DDRegisterClientResponse(CapNProtoResponseMsg):
         rv["managerID"] = self._managerID
         rv["managerNodes"] = self._managerNodes
         rv["name"] = self._name
+        rv["waitForKeys"] = self._waitForKeys
         if self._timeout == NO_TIMEOUT_VALUE:
             rv["timeout"] = None
         else:
@@ -1434,6 +1449,7 @@ class DDRegisterClientResponse(CapNProtoResponseMsg):
             msg_mgr_nodes[i] = self._managerNodes[i]
         client_msg.name = self._name
         client_msg.timeout = self._timeout
+        client_msg.waitForKeys = self._waitForKeys
         return cap_msg
 
     @property
@@ -1455,6 +1471,10 @@ class DDRegisterClientResponse(CapNProtoResponseMsg):
     @property
     def name(self):
         return self._name
+
+    @property
+    def waitForKeys(self):
+        return self._waitForKeys
 
     @property
     def timeout(self):

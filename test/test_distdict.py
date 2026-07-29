@@ -23,6 +23,14 @@ import traceback
 from dragon.rc import DragonError
 
 
+def _assert_wait_for_keys(d, expected):
+    # Runs in a child process, so the DDict arrives here via attach rather
+    # than construction. This is the path that previously had no access to
+    # the wait_for_keys setting.
+    assert d.wait_for_keys == expected
+    d.detach()
+
+
 class TestDDict(unittest.TestCase):
     def setUp(self):
         pass
@@ -64,11 +72,22 @@ class TestDDict(unittest.TestCase):
     def test_ddict_client_response_message(self):
         manager_nodes = b64encode(cloudpickle.dumps([Node(ident=host_id()) for _ in range(2)]))
         msg = dmsg.DDRegisterClientResponse(
-            42, 43, DragonError.SUCCESS, 0, 2, 3, manager_nodes, "this is name", 10, "this is dragon error info"
+            42,
+            43,
+            DragonError.SUCCESS,
+            0,
+            2,
+            3,
+            manager_nodes,
+            "this is name",
+            10,
+            waitForKeys=True,
+            errInfo="this is dragon error info",
         )
         ser = msg.serialize()
         newmsg = dmsg.parse(ser)
         self.assertIsInstance(newmsg, dmsg.DDRegisterClientResponse)
+        self.assertTrue(newmsg.waitForKeys)
 
     def test_bringup_teardown(self):
         d = DDict(2, 1, 3000000)
@@ -78,6 +97,25 @@ class TestDDict(unittest.TestCase):
         d = DDict(2, 1, 3000000)
         d.detach()
         d.destroy()
+
+    def test_wait_for_keys_attribute(self):
+        for wait_for_keys, working_set_size in ((False, 1), (True, 2)):
+            with self.subTest(wait_for_keys=wait_for_keys):
+                d = DDict(
+                    2,
+                    1,
+                    3000000,
+                    working_set_size=working_set_size,
+                    wait_for_keys=wait_for_keys,
+                )
+                try:
+                    self.assertEqual(d.wait_for_keys, wait_for_keys)
+                    proc = mp.Process(target=_assert_wait_for_keys, args=(d, wait_for_keys))
+                    proc.start()
+                    proc.join()
+                    self.assertEqual(proc.exitcode, 0)
+                finally:
+                    d.destroy()
 
     def test_put_and_get(self):
         d = DDict(2, 1, 3000000)

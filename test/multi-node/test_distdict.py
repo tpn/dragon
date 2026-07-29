@@ -109,11 +109,22 @@ class TestDDict(unittest.TestCase):
     def test_ddict_client_response_message(self):
         manager_nodes = b64encode(cloudpickle.dumps([Node(ident=socket.gethostname()) for _ in range(2)]))
         msg = dmsg.DDRegisterClientResponse(
-            42, 43, DragonError.SUCCESS, 0, 2, 3, manager_nodes, "this is name", 10, "this is dragon error info"
+            42,
+            43,
+            DragonError.SUCCESS,
+            0,
+            2,
+            3,
+            manager_nodes,
+            "this is name",
+            10,
+            waitForKeys=True,
+            errInfo="this is dragon error info",
         )
         ser = msg.serialize()
         newmsg = dmsg.parse(ser)
         self.assertIsInstance(newmsg, dmsg.DDRegisterClientResponse)
+        self.assertTrue(newmsg.waitForKeys)
 
     def test_bringup_teardown(self):
         d = DDict(self._managers_per_node, self._num_nodes, self._total_mem_size)

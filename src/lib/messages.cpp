@@ -779,12 +779,13 @@ DDRegisterClientMsg::bufferedRespFLI()
 /********************************************************************************************************/
 /* ddict register client response */
 
-DDRegisterClientResponseMsg::DDRegisterClientResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, uint64_t clientID, uint64_t numManagers, uint64_t managerID, uint64_t timeout) :
+DDRegisterClientResponseMsg::DDRegisterClientResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, uint64_t clientID, uint64_t numManagers, uint64_t managerID, uint64_t timeout, bool waitForKeys) :
     DragonResponseMsg(DDRegisterClientResponseMsg::TC, tag, ref, err, errInfo),
     mClientID(clientID),
     mNumManagers(numManagers),
     mManagerID(managerID),
-    mTimeout(timeout) {}
+    mTimeout(timeout),
+    mWaitForKeys(waitForKeys) {}
 
 dragonError_t
 DDRegisterClientResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
@@ -803,7 +804,8 @@ DDRegisterClientResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg**
             registerClientResponseReader.getClientID(),
             registerClientResponseReader.getNumManagers(),
             registerClientResponseReader.getManagerID(),
-            registerClientResponseReader.getTimeout());
+            registerClientResponseReader.getTimeout(),
+            registerClientResponseReader.getWaitForKeys());
 
         capnp::List<capnp::Text>::Reader manager_nodes_reader = registerClientResponseReader.getManagerNodes();
 
@@ -849,6 +851,12 @@ DDRegisterClientResponseMsg::timeout()
     return mTimeout;
 }
 
+bool
+DDRegisterClientResponseMsg::waitForKeys()
+{
+    return mWaitForKeys;
+}
+
 void
 DDRegisterClientResponseMsg::builder(MessageDef::Builder& msg)
 {
@@ -866,6 +874,7 @@ DDRegisterClientResponseMsg::builder(MessageDef::Builder& msg)
     builder.setNumManagers(mNumManagers);
     builder.setManagerID(mManagerID);
     builder.setTimeout(mTimeout);
+    builder.setWaitForKeys(mWaitForKeys);
 }
 
 

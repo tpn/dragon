@@ -1618,6 +1618,31 @@ dragonError_t test_main_manager(const char * ddict_ser, const char* main_manager
     return DRAGON_SUCCESS;
 }
 
+dragonError_t test_wait_for_keys(const char * ddict_ser, const char* expected) {
+
+    dragonDDictDescr_t ddict;
+
+    // Attach to the running instance of the dictionary
+    dragonError_t err = dragon_ddict_attach(ddict_ser, &ddict, &TIMEOUT);
+    if (err != DRAGON_SUCCESS)
+        err_fail(err, "Could not attach");
+
+    bool wait_for_keys = false;
+    err = dragon_ddict_wait_for_keys(&ddict, &wait_for_keys);
+    if (err != DRAGON_SUCCESS)
+        err_fail(err, "Could not get the wait for keys setting.");
+
+    bool expected_val = (strcmp(expected, "True") == 0);
+    assert(wait_for_keys == expected_val);
+
+    // Detach from the dictionary
+    err = dragon_ddict_detach(&ddict);
+    if (err != DRAGON_SUCCESS)
+        err_fail(err, "Could not detach");
+
+    return DRAGON_SUCCESS;
+}
+
 dragonError_t test_custom_manager_attach(const char * ddict_ser) {
     dragonDDictDescr_t ddict;
 
@@ -2939,6 +2964,9 @@ int main(int argc, char* argv[]) {
     } else if (strcmp(test, "test_main_manager") == 0) {
         char * main_manager = argv[3];
         err = test_main_manager(ddict_descr, main_manager);
+    } else if (strcmp(test, "test_wait_for_keys") == 0) {
+        char * expected = argv[3];
+        err = test_wait_for_keys(ddict_descr, expected);
     } else if (strcmp(test, "test_custom_manager_attach") == 0) {
         err = test_custom_manager_attach(ddict_descr);
     } else if (strcmp(test, "test_custom_manager_put") == 0) {

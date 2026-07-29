@@ -126,7 +126,7 @@ class Queue:
         True. If joinable is True and not provide, a semaphore channel will be created and managed internally.
         :type channel: instance of dragon.channel, optional
         :param strm_channels: A list of stream channel objects to place in the manager channel. If provided then the num_streams
-        value is ignored. If not provided and the number of stream channels is 0 in an unbuffered queue, then a steram channel
+        value is ignored. If not provided and the number of stream channels is 0 in an unbuffered queue, then a stream channel
         must be provided when sending or receiving. If stream channels is provided to an unbuffered queue, a main channel and
         manager channel will be created and managed internally if not provided.
         :param pickler: A custom pickler may be provided. It must support the dump and load api calls similar

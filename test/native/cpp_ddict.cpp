@@ -657,6 +657,13 @@ dragonError_t test_local_size(const char * ddict_ser) {
     return DRAGON_SUCCESS;
 }
 
+dragonError_t test_wait_for_keys(const char * ddict_ser, const std::string expected) {
+    DDict<Serializable, Serializable> dd(ddict_ser, &TIMEOUT);
+    bool expected_val = (expected.compare("True") == 0);
+    assert(dd.wait_for_keys() == expected_val);
+    return DRAGON_SUCCESS;
+}
+
 int main(int argc, char* argv[]) {
     char* ddict_descr = argv[1];
     std::string test = argv[2];
@@ -777,6 +784,9 @@ int main(int argc, char* argv[]) {
             err = test_no_persisted_ids(ddict_descr);
         } else if (test.compare("test_local_size") == 0){
             err = test_local_size(ddict_descr);
+        } else if (test.compare("test_wait_for_keys") == 0){
+            std::string expected = argv[3];
+            err = test_wait_for_keys(ddict_descr, expected);
         } else {
             return DRAGON_NOT_IMPLEMENTED;
         }

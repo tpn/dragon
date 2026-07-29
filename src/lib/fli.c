@@ -1139,7 +1139,7 @@ static void* _from_fd_to_fli (void* ptr) {
 
     err = DRAGON_SUCCESS;
     while ((err == DRAGON_SUCCESS) && ((num_bytes = read(arg->fd, buffer, arg->chunk_size)) > 0))
-        err = dragon_fli_send_bytes(arg->sendh, num_bytes, buffer, user_arg, arg->buffer, NULL);
+        err = dragon_fli_send_bytes(arg->sendh, num_bytes, (const uint8_t*)buffer, user_arg, arg->buffer, NULL);
 
 
     if (err != DRAGON_SUCCESS) {
@@ -3225,7 +3225,7 @@ dragonError_t dragon_fli_finalize_readable_fd(dragonFLIRecvHandleDescr_t* recv_h
  *
  * @param num_bytes is the number of bytes to be sent and must be greater than zero.
  *
- * @param bytes is a pointer to the data to be sent.
+ * @param bytes is a const pointer to the data to be sent.
  *
  * @param arg is meta-data assigned in a 64-bit field that can be set and will be
  * received by the receiving side. It does not affect the message itself. When using
@@ -3249,7 +3249,7 @@ dragonError_t dragon_fli_finalize_readable_fd(dragonFLIRecvHandleDescr_t* recv_h
  * @return DRAGON_SUCCESS or a return code to indicate what problem occurred.
  **/
 dragonError_t dragon_fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, size_t num_bytes,
-                uint8_t* bytes, uint64_t arg, const bool buffer, const timespec_t* timeout) {
+                const uint8_t* bytes, uint64_t arg, const bool buffer, const timespec_t* timeout) {
     dragonError_t err;
 
     if (send_handle == NULL)
@@ -3258,12 +3258,13 @@ dragonError_t dragon_fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, siz
     if (arg >= FLI_RESERVED_HINTS)
         err_return(DRAGON_INVALID_ARGUMENT, "Cannot specify an arg value greater than or equal to 0xFFFFFFFFFFFFFF00. These values are reserved for internal use.");
 
-    err = _fli_send_bytes(send_handle, num_bytes, bytes, arg, buffer, timeout);
+    err = _fli_send_bytes(send_handle, num_bytes, (uint8_t*)bytes, arg, buffer, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Call of internal send bytes failed");
 
     no_err_return(DRAGON_SUCCESS);
 }
+
 
 /**
  * @brief Send shared memory through the FLI adapter.

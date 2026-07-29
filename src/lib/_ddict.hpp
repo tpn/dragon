@@ -65,6 +65,7 @@ class dragonDDict_t {
 
     uint64_t clientID;
     bool has_local_manager;
+    bool wait_for_keys;
     uint64_t local_manager;
     uint64_t main_manager;
     bool has_chosen_manager;

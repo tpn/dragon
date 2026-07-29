@@ -723,6 +723,29 @@ class DDict {
     }
 
     /**
+     * @brief Return whether the DDict waits for keys.
+     *
+     * Returns true if this DDict was created with wait_for_keys enabled and
+     * false otherwise. When enabled, each manager tracks the set of keys
+     * written at each checkpoint and clients that request a key which has not
+     * yet been written at their checkpoint will block until it becomes
+     * available.
+     *
+     * This value is determined when the DDict is created and is available to
+     * every client, including clients that attached to an existing DDict.
+     *
+     * @returns true if wait for keys is enabled and false otherwise.
+     */
+    bool wait_for_keys() {
+        dragonError_t err;
+        bool waits_for_keys = false;
+        err = dragon_ddict_wait_for_keys(&mCDict, &waits_for_keys);
+        if (err != DRAGON_SUCCESS)
+            throw DragonError(err, "Could not get the DDict wait for keys setting.");
+        return waits_for_keys;
+    }
+
+    /**
      * @brief Get a manager directed copy of the DDict
      *
      * Calling this will return a new DDict reference that

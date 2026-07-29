@@ -110,6 +110,7 @@ struct DDRegisterClientResponseDef {
     managerNodes @3: List(Text);
     name @4: Text;
     timeout @5: UInt64;
+    waitForKeys @6: Bool;
 }
 
 struct DDConnectToManagerDef {

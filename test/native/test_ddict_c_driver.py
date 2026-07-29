@@ -779,6 +779,24 @@ class TestDDictC(unittest.TestCase):
         ddict.destroy()
         self.assertEqual(proc.returncode, 0, "C client exited with non-zero exit code")
 
+    def test_wait_for_keys_false(self):
+        exe = "c_ddict"
+        ddict = DDict(2, 1, 3000000, trace=True)
+        ser_ddict = ddict.serialize()
+        proc = Popen(executable=str(test_dir / exe), args=[ser_ddict, "test_wait_for_keys", "False"], env=ENV)
+        proc.wait()
+        ddict.destroy()
+        self.assertEqual(proc.returncode, 0, "C client exited with non-zero exit code")
+
+    def test_wait_for_keys_true(self):
+        exe = "c_ddict"
+        ddict = DDict(2, 1, 3000000, working_set_size=2, wait_for_keys=True, trace=True)
+        ser_ddict = ddict.serialize()
+        proc = Popen(executable=str(test_dir / exe), args=[ser_ddict, "test_wait_for_keys", "True"], env=ENV)
+        proc.wait()
+        ddict.destroy()
+        self.assertEqual(proc.returncode, 0, "C client exited with non-zero exit code")
+
 
 if __name__ == "__main__":
     mp.set_start_method("dragon")

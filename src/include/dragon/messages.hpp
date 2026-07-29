@@ -255,12 +255,13 @@ class DDRegisterClientResponseMsg: public DragonResponseMsg {
     public:
     static const MessageType TC = DD_REGISTER_CLIENT_RESPONSE;
 
-    DDRegisterClientResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, uint64_t clientID, uint64_t numManagers, uint64_t managerID, uint64_t timeout);
+    DDRegisterClientResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, uint64_t clientID, uint64_t numManagers, uint64_t managerID, uint64_t timeout, bool waitForKeys);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     uint64_t clientID();
     uint64_t numManagers();
     uint64_t managerID();
     uint64_t timeout();
+    bool waitForKeys();
     const vector<std::string>& managerNodes(); // returns a reference to the internal vector. Don't destroy the message and try to continue to using the vector after destroying.
 
     protected:
@@ -271,6 +272,7 @@ class DDRegisterClientResponseMsg: public DragonResponseMsg {
     uint64_t mNumManagers;
     uint64_t mManagerID;
     uint64_t mTimeout;
+    bool mWaitForKeys;
     vector<std::string> mManagerNodes;
 };
 

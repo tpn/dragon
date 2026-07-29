@@ -2004,6 +2004,7 @@ class DDict:
             self._timeout = resp_msg.timeout
         self._client_id = resp_msg.clientID
         self._num_managers = resp_msg.numManagers
+        self._wait_for_keys = resp_msg.waitForKeys
         for serialized_node in resp_msg.managerNodes:
             self._manager_nodes.append(cloudpickle.loads(b64decode(serialized_node)))
         # local managers is a list of local managers' ID
@@ -4210,6 +4211,22 @@ class DDict:
 
         """
         return self._main_manager
+
+    @property
+    def wait_for_keys(self) -> bool:
+        """
+
+        Returns True if this DDict was created with wait_for_keys enabled and
+        False otherwise. When enabled, each manager tracks the set of keys
+        written at each checkpoint and clients that request a key which has not
+        yet been written at their checkpoint will block until it becomes
+        available.
+
+        This value is determined when the DDict is created and is available to
+        every client, including clients that attached to an existing DDict.
+
+        """
+        return self._wait_for_keys
 
     @property
     def manager_nodes(self) -> list[Node]:

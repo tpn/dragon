@@ -707,7 +707,7 @@ cdef extern from "dragon/fli.h":
                             const timespec_t* timeout) nogil
     dragonError_t dragon_fli_finalize_readable_fd(dragonFLIRecvHandleDescr_t* recv_handle) nogil
     dragonError_t dragon_fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, size_t num_bytes,
-                                        uint8_t* bytes, uint64_t arg, const bool buffer, const timespec_t* timeout) nogil
+                                        const uint8_t* bytes, uint64_t arg, const bool buffer, const timespec_t* timeout) nogil
     dragonError_t dragon_fli_get_buffered_bytes(dragonFLISendHandleDescr_t* send_handle,
                     dragonMemoryDescr_t* mem_descr, uint64_t* arg, const timespec_t* timeout) nogil
     dragonError_t dragon_fli_send_mem(dragonFLISendHandleDescr_t* send_handle, dragonMemoryDescr_t* mem,

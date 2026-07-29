@@ -2493,6 +2493,7 @@ class Manager:
                 managerNodes=self._serialized_manager_nodes,
                 name=self._name,
                 timeout=self._timeout,
+                waitForKeys=self._wait_for_keys,
             )
             self._send_msg(resp_msg, self._buffered_client_connections_map[client_id])
 

@@ -571,6 +571,7 @@ static dragonError_t _register_client_to_main_manager(dragonDDict_t * ddict) {
     // Store our client ID, number of managers and malloc all managers' nodes
     ddict->clientID = registerClientResponseMsg->clientID();
     ddict->num_managers = registerClientResponseMsg->numManagers();
+    ddict->wait_for_keys = registerClientResponseMsg->waitForKeys();
 
     main_manager_id = registerClientResponseMsg->managerID();
     ddict->manager_table[main_manager_id] = ddict->main_manager_fli;
@@ -2564,6 +2565,26 @@ dragonError_t dragon_ddict_main_manager(const dragonDDictDescr_t * dd_descr, uin
         err_return(err, "Could not find ddict object.");
 
     *main_manager = dd->main_manager;
+
+    no_err_return(DRAGON_SUCCESS);
+}
+
+dragonError_t dragon_ddict_wait_for_keys(const dragonDDictDescr_t * dd_descr, bool * wait_for_keys) {
+
+    dragonError_t err;
+    dragonDDict_t * dd = nullptr;
+
+    if (dd_descr == nullptr)
+        err_return(DRAGON_INVALID_ARGUMENT, "Invalid ddict descriptor.");
+
+    if (wait_for_keys == nullptr)
+        err_return(DRAGON_INVALID_ARGUMENT, "Invalid wait_for_keys. The wait_for_keys argument should be non null.");
+
+    err = _ddict_from_descr(dd_descr, &dd);
+    if (err != DRAGON_SUCCESS)
+        err_return(err, "Could not find ddict object.");
+
+    *wait_for_keys = dd->wait_for_keys;
 
     no_err_return(DRAGON_SUCCESS);
 }

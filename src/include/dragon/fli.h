@@ -287,7 +287,7 @@ dragon_fli_finalize_readable_fd(dragonFLIRecvHandleDescr_t* recv_handle);
 
 dragonError_t
 dragon_fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, size_t num_bytes,
-                uint8_t* bytes, uint64_t arg, const bool buffer, const timespec_t* timeout);
+                const uint8_t* bytes, uint64_t arg, const bool buffer, const timespec_t* timeout);
 
 dragonError_t
 dragon_fli_get_buffered_bytes(dragonFLISendHandleDescr_t* send_handle,

@@ -673,6 +673,24 @@ dragon_ddict_set_checkpoint_id(const dragonDDictDescr_t * dd_descr, uint64_t chk
  dragonError_t
  dragon_ddict_main_manager(const dragonDDictDescr_t * dd_descr, uint64_t * main_manager);
 
+ /**
+ * @brief Get the wait for keys setting of the dictionary.
+ *
+ * The wait for keys setting is determined when the dictionary is created and
+ * cannot be changed afterward. When it is true, each manager tracks the set of
+ * keys written at each checkpoint and clients that request a key which has not
+ * yet been written at their checkpoint will block until it becomes available.
+ *
+ * @param dd_descr is a valid DDict descriptor that has previously been created or attached.
+ *
+ * @param wait_for_keys is a pointer to a boolean that is set to true if the
+ * dictionary was created with wait for keys enabled and false otherwise.
+ *
+ * @return DRAGON_SUCCESS or a return code to indicate what problem occurred.
+ **/
+ dragonError_t
+ dragon_ddict_wait_for_keys(const dragonDDictDescr_t * dd_descr, bool * wait_for_keys);
+
 /**
  * @brief Create a copy of original client object and assign a chosen manager. The client will only
  * interact with the chosen manager.
