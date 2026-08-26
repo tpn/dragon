@@ -45,9 +45,11 @@ def determine_wlm(
         raise ValueError(msg)
 
     if force_single_node:
+        logger.debug("determine_wlm: single node mode requested, returning None")
         return None
 
     if force_multi_node and force_wlm:
+        logger.debug("determine_wlm: multi-node mode requested with forced WLM, returning %s class", force_wlm)
         return wlm_cls_dict[force_wlm]
 
     # Try to determine if we're on a supported multinode system
@@ -70,6 +72,7 @@ def determine_wlm(
             raise RuntimeError("Cannot determine WLM to use for multi-node mode. Please specify a WLM to use.")
 
         # Assume we're running single node mode
+        logger.debug("determine_wlm: no WLM detected, assuming single node mode")
         return None
 
     # There is a possibility that we may detect more than one WLM. In this case, we should
@@ -83,6 +86,8 @@ def determine_wlm(
     else:
         raise RuntimeError("Error: Unable to get WLM class object.")
 
+    logger.debug("determine_wlm: detected WLM %s", wlm_cls.NAME)
+
     if not wlm_cls.check_for_allocation():
         if wlm_cls is wlm_cls_dict[WLM.DRAGON_SSH]:
             msg = "DragonRun requires a host list to execute. Please provide a host list or use 'dhosts' to define one."
@@ -90,6 +95,7 @@ def determine_wlm(
             msg = f"DragonRun detected the WLM {wlm_cls.NAME} but no allocation was found. Please retry after obtaining an allocation."
         raise DragonRunMissingAllocation(msg)
 
+    logger.debug("determine_wlm: returning WLM %s", wlm_cls.NAME)
     return wlm_cls
 
 
@@ -100,17 +106,19 @@ def get_host_list(
     force_wlm: Optional[WLM] = None,
     *args,
     **kwargs,
-) -> Optional[List[str]]:
+) -> List[str]:
     # If we're being provided with a host_list, then just use those, otherwise figure out our host_list
-    if not host_list:
+    if isinstance(host_list, list) and len(host_list) > 0:
+        return host_list
+    else:
         # Try to determine the wlm and gather our host-list that way.
         if wlm_cls := determine_wlm(
             force_single_node=force_single_node,
             force_multi_node=force_multi_node,
             force_wlm=force_wlm,
         ):
-            host_list = wlm_cls.get_host_list()
-    return host_list
+            return wlm_cls.get_host_list()
+    return []
 
 
 PIPE = -1
@@ -142,76 +150,84 @@ class DragonRunPopen:
         stderr: Optional[int] = None,
         stdin: Optional[int] = None,
     ):
-        self.user_command = user_command
-        self.cwd = cwd
-        self.env = env
-        self.force_single_node = force_single_node
-        self.force_multi_node = force_multi_node
-        self.force_wlm = force_wlm
-        self.fanout = fanout
-        self.ssh_config_path = ssh_config_path
-        self.private_key = private_key
-        self.passphrase = passphrase
-        self.log_level = log_level
-        self._stdout: Optional[int] = stdout
-        self._stderr: Optional[int] = stderr
-        self._stdin: Optional[int] = stdin
+        try:
+            logger.debug("++DragonRunPopen.__init__")
 
-        self.abnormal_exit = False
-        self.abnormal_exit_msg = None
+            self.user_command = user_command
+            self.cwd = cwd
+            self.env = env
+            self.force_single_node = force_single_node
+            self.force_multi_node = force_multi_node
+            self.force_wlm = force_wlm
+            self.fanout = fanout
+            self.ssh_config_path = ssh_config_path
+            self.private_key = private_key
+            self.passphrase = passphrase
+            self.log_level = log_level
+            self._stdout: Optional[int] = stdout
+            self._stderr: Optional[int] = stderr
+            self._stdin: Optional[int] = stdin
 
-        logger.debug("++DragonRunPopen.__init__")
-        self.host_list = get_host_list(
-            host_list=host_list,
-            force_single_node=force_single_node,
-            force_multi_node=force_multi_node,
-            force_wlm=force_wlm,
-        )
-        logger.debug("--DragonRunPopen.__init__")
+            self.abnormal_exit = False
+            self.abnormal_exit_msg = None
 
-        self.exec_on_fe = exec_on_fe
-        if not self.host_list:
-            self.exec_on_fe = True
+            self.host_list = get_host_list(
+                host_list=host_list,
+                force_single_node=force_single_node,
+                force_multi_node=force_multi_node,
+                force_wlm=force_wlm,
+            )
 
-        if self._stdout == None:
-            self._stdout_rd = None
-            self._stdout_wd = None
-            self._stdout_rh = None
-            self._stdout_wh = None
-        elif self._stdout == PIPE:
-            self._stdout_rd, self._stdout_wd = os.pipe()
-            self._stdout_rh = os.fdopen(self._stdout_rd, "r")
-            self._stdout_wh = os.fdopen(self._stdout_wd, "w")
-        elif self._stdout == DEVNULL:
-            self._stdout_rd = None
-            self._stdout_wd = None
-            self._stdout_rh = open(os.devnull, "r")
-            self._stdout_wh = open(os.devnull, "w")
-        else:
-            raise NotImplementedError("DragonRunPopen only supports stdout=PIPE, DEVNULL, or None.")
+            if self.host_list:
+                logger.debug("DragonRunPopen host_list: %s", self.host_list)
+            else:
+                logger.debug("DragonRunPopen host_list is empty, running in single node mode.")
 
-        if self._stderr == None:
-            self._sterr_rd = None
-            self._stderr_wd = None
-            self._stderr_rh = None
-            self._stderr_wh = None
-        elif self._stderr == PIPE:
-            self._stderr_rd, self._stderr_wd = os.pipe()
-            self._stderr_rh = os.fdopen(self._stderr_rd, "r")
-            self._stderr_wh = os.fdopen(self._stderr_wd, "w")
-        elif self._stderr == DEVNULL:
-            self._stderr_rd = None
-            self._stderr_wd = None
-            self._stderr_rh = open(os.devnull, "r")
-            self._stderr_wh = open(os.devnull, "w")
-        else:
-            raise NotImplementedError("DragonRunPopen only supports stderr=PIPE, DEVNULL, or None.")
+            self.exec_on_fe = exec_on_fe
+            if not self.host_list:
+                self.exec_on_fe = True
 
-        if self._stdin != None:
-            raise NotImplementedError("DragonRunPopen does not support stdin redirection.")
+            if self._stdout == None:
+                self._stdout_rd = None
+                self._stdout_wd = None
+                self._stdout_rh = None
+                self._stdout_wh = None
+            elif self._stdout == PIPE:
+                self._stdout_rd, self._stdout_wd = os.pipe()
+                self._stdout_rh = os.fdopen(self._stdout_rd, "r")
+                self._stdout_wh = os.fdopen(self._stdout_wd, "w")
+            elif self._stdout == DEVNULL:
+                self._stdout_rd = None
+                self._stdout_wd = None
+                self._stdout_rh = open(os.devnull, "r")
+                self._stdout_wh = open(os.devnull, "w")
+            else:
+                raise NotImplementedError("DragonRunPopen only supports stdout=PIPE, DEVNULL, or None.")
 
-        self._drun_thread: threading.Thread = threading.Thread(target=self._drun_proc, name="DragonRunPopenThread")
-        self._drun_thread.start()
+            if self._stderr == None:
+                self._sterr_rd = None
+                self._stderr_wd = None
+                self._stderr_rh = None
+                self._stderr_wh = None
+            elif self._stderr == PIPE:
+                self._stderr_rd, self._stderr_wd = os.pipe()
+                self._stderr_rh = os.fdopen(self._stderr_rd, "r")
+                self._stderr_wh = os.fdopen(self._stderr_wd, "w")
+            elif self._stderr == DEVNULL:
+                self._stderr_rd = None
+                self._stderr_wd = None
+                self._stderr_rh = open(os.devnull, "r")
+                self._stderr_wh = open(os.devnull, "w")
+            else:
+                raise NotImplementedError("DragonRunPopen only supports stderr=PIPE, DEVNULL, or None.")
+
+            if self._stdin != None:
+                raise NotImplementedError("DragonRunPopen does not support stdin redirection.")
+
+            self._drun_thread: threading.Thread = threading.Thread(target=self._drun_proc, name="DragonRunPopenThread")
+            self._drun_thread.start()
+        finally:
+            logger.debug("--DragonRunPopen.__init__")
 
     @property
     def stdout(self):

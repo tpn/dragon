@@ -112,12 +112,16 @@ class DDict {
             mKey.serialize(&key_sendh, KEY_HINT, true, mDict.mTimeout);
 
             err = dragon_ddict_get(&req);
-            if (err != DRAGON_SUCCESS)
-                throw DragonError(err, "Could not send DDict get message.");
+            if (err != DRAGON_SUCCESS) {
+                std::string msg("Could not send DDict get message.\n");
+                msg += dragon_getlasterrstr();
+                std::cout << "Error String: " << msg << std::endl;
+                throw DragonError(err, msg.c_str());
+            }
 
             err = dragon_ddict_request_recvh(&req, &recvh);
             if (err != DRAGON_SUCCESS)
-                throw DragonError(err, "Could not access the request send handle.");
+                throw DragonError(err, "Could not access the request receive handle.");
 
             SerializableValue value = SerializableValue::deserialize(&recvh, &hint, mDict.mTimeout);
             if (hint != VALUE_HINT)
@@ -186,7 +190,6 @@ class DDict {
         if (cDict == nullptr)
             throw DragonError(DRAGON_INVALID_ARGUMENT, "The cDict argument cannot be null and must point to an attached C ddict descriptor.");
         mCDict = *cDict;
-        mDetachOnDestroy = false;
         mTimeout = nullptr;
     }
 
@@ -204,7 +207,6 @@ class DDict {
         if (cDict == nullptr)
             throw DragonError(DRAGON_INVALID_ARGUMENT, "The cDict argument cannot be null and must point to an attached C ddict descriptor.");
         mCDict = *cDict;
-        mDetachOnDestroy = false;
         mTimeoutVal = *timeout;
         mTimeout = &mTimeoutVal;
 
@@ -247,10 +249,13 @@ class DDict {
         }
 
         err = dragon_ddict_attach(serialized_dict, &mCDict, mTimeout);
-        if (err != DRAGON_SUCCESS)
-            throw DragonError(err, "Could not attach to DDict.");
+        if (err != DRAGON_SUCCESS) {
+            string traceback= dragon_getlasterrstr();
+            string message = "Could not attach to DDict.\n";
+            message = message + traceback;
 
-        mDetachOnDestroy = true;
+            throw DragonError(err, message.c_str());
+        }
     }
 
     /**
@@ -260,14 +265,19 @@ class DDict {
      * on the stack and gets called when delete is called on a heap allocated
      * DDict.
      */
-    ~DDict() {
-        dragonError_t err;
+    ~DDict() = default;
 
-        if (mDetachOnDestroy) {
-            err = dragon_ddict_detach(&mCDict);
-            if (err != DRAGON_SUCCESS)
-                cerr << "Error while destroying C++ DDict: " << dragon_get_rc_string(err) << " : " << dragon_getlasterrstr();
-        }
+    /**
+     * @brief Detach from DDict
+     *
+     * This detaches this DDict from the current process. It must be re-attached afterward to
+     * use it again. This must be called explicitly to detach. Otherwise, when the process
+     * ends it will no longer be attached.
+     */
+    void detach() {
+        dragonError_t err = dragon_ddict_detach(&mCDict);
+        if (err != DRAGON_SUCCESS)
+            cerr << "Error while detaching from C++ DDict: " << dragon_get_rc_string(err) << " : " << dragon_getlasterrstr();
     }
 
     // DDictKeyIterator& begin() {
@@ -289,6 +299,15 @@ class DDict {
      */
     const char* serialize() {
         return mSerialized.c_str();
+    }
+
+    /**
+     * @brief Convert this DDict into a Serializable so it may be sent to another process.
+     *
+     * Only the descriptor of the DDict is carried by the Serializable.
+     */
+    operator Serializable() const {
+        return Serializable(SerializableDDict<Serializable, Serializable>(mSerialized));
     }
 
     /**
@@ -472,7 +491,7 @@ class DDict {
 
         err = dragon_ddict_create_request(&mCDict, &req);
         if (err != DRAGON_SUCCESS)
-            throw DragonError(err, "Could not create DDict erase request.");
+            throw DragonError(err, "Could not create DDict fetch_add request.");
 
         err = dragon_ddict_request_key_sendh(&req, &key_sendh);
         if (err != DRAGON_SUCCESS)
@@ -1136,6 +1155,15 @@ class DDict {
     timespec_t mTimeoutVal;
 
 };
+
+template<class SerializableKey, class SerializableValue>
+SerializableDDict<SerializableKey, SerializableValue>::SerializableDDict(DDict<SerializableKey, SerializableValue>& dict):
+    mSerialized(std::string(dict.serialize())) {}
+
+template<class Key, class Value>
+Serializable::operator DDict<Key, Value>() const {
+    return DDict<Key, Value>(asSerializableDDict().val().c_str(), nullptr);
+}
 
 }
 #endif

@@ -10,7 +10,7 @@
         "host_id": 18446744071562725120,
         "num_cpus": 0,
         "physical_mem": 0,
-        "shep_cd": ""
+        "ls_cd": ""
     },
     "3": {
         "state": 4,
@@ -24,7 +24,7 @@
         "host_id": 18446744071562725376,
         "num_cpus": 0,
         "physical_mem": 0,
-        "shep_cd": ""
+        "ls_cd": ""
     },
     "0": {
         "state": 4,
@@ -37,7 +37,7 @@
         "host_id": 18446744071562724608,
         "num_cpus": 0,
         "physical_mem": 0,
-        "shep_cd": ""
+        "ls_cd": ""
     },
     "1": {
         "state": 4,
@@ -50,6 +50,6 @@
         "host_id": 18446744071562724864,
         "num_cpus": 0,
         "physical_mem": 0,
-        "shep_cd": ""
+        "ls_cd": ""
     }
 }

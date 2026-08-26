@@ -22,9 +22,46 @@ import dragon.fli as fli
 
 LOG = logging.getLogger(__name__)
 
+_DIRECT_BYTES_HINT = 1
+_DIRECT_BYTEARRAY_HINT = 2
+_DIRECT_PAYLOAD_HINT_SHIFT = 2
+_DIRECT_PAYLOAD_MAX_SIZE = (1 << 62) - 64
+
 
 class QueueError(Exception):
     pass
+
+
+def _direct_payload(obj, pickler):
+    # This narrow fast path bypasses pickle only for default-cloudpickle bytes
+    # types whose payload size and reconstruction type are known exactly.
+    if pickler is not cp:
+        return None
+
+    if type(obj) is bytes:
+        payload_type = _DIRECT_BYTES_HINT
+    elif type(obj) is bytearray:
+        payload_type = _DIRECT_BYTEARRAY_HINT
+    else:
+        return None
+
+    payload_size = len(obj)
+    if payload_size == 0 or payload_size >= _DIRECT_PAYLOAD_MAX_SIZE:
+        return None
+
+    # The Channel hint accompanies the managed allocation. Reserve its low bits
+    # for the reconstruction type and carry the logical length above them, since
+    # pool allocations may be larger than the requested payload.
+    return obj, (payload_size << _DIRECT_PAYLOAD_HINT_SHIFT) | payload_type
+
+
+def _direct_payload_type(hint):
+    # A non-direct pickle message uses hint 0, so only recognized low-bit tags
+    # select the direct bytes/bytearray receive path.
+    payload_type = hint & ((1 << _DIRECT_PAYLOAD_HINT_SHIFT) - 1)
+    if payload_type in (_DIRECT_BYTES_HINT, _DIRECT_BYTEARRAY_HINT):
+        return payload_type, hint >> _DIRECT_PAYLOAD_HINT_SHIFT
+    return None
 
 
 def _mk_channel(*, pool=None, block_size=None, capacity=100, policy=None):
@@ -63,7 +100,6 @@ def _mk_sem_channel(*, pool=None, block_size=None, policy=None):
 
 
 class Queue:
-
     """A Dragon native Queue relying on Dragon Channels.
 
     The interface resembles Python Multiprocessing.Queue. In particular, the
@@ -92,7 +128,7 @@ class Queue:
         mgr_channel: object = None,
         sem_channel: object = None,
         strm_channels: list[object] = None,
-        pickler = cp,
+        pickler=cp,
     ):
         """Init method
 
@@ -166,6 +202,7 @@ class Queue:
         self._num_managed_strm_channels = 0
         self._strm_channels = [] if strm_channels is None else strm_channels
         self._pickler = pickler
+        self._pickler_has_loads = hasattr(pickler, "loads")
         self._node_index = None  # Don't set it here. That way we won't talk to GS unless asked to.
 
         # Now detect what needs to be managed internally and if there are conflicts in
@@ -289,6 +326,7 @@ class Queue:
         ) = state
 
         self._pickler = cp.loads(pickler)
+        self._pickler_has_loads = hasattr(self._pickler, "loads")
 
         self._serialized_fli = b64encode(self._fli.serialize())
 
@@ -357,7 +395,7 @@ class Queue:
         if self._closed:
             raise ValueError(f"Queue {self!r} is closed")
 
-        return self._main_channel.poll(timeout=timeout)
+        return self._fli.poll(timeout=timeout)
 
     def empty(self) -> bool:
         """Return True if the queue is empty, False otherwise.
@@ -403,7 +441,40 @@ class Queue:
         try:
             payload = None
             with self._fli.recvh(stream_channel=stream_channel, timeout=timeout) as recvh:
-                payload = self._pickler.load(file=fli.PickleReadAdapter(recvh=recvh, timeout=timeout))
+                # Buffered Queues put one complete item in one Dragon managed
+                # allocation. Picklers with loads() can decode that complete
+                # allocation at once. Unbuffered Queues, and custom picklers
+                # without loads(), use the file-like fallback below instead.
+                if self._buffered and self._pickler_has_loads:
+                    mem, hint = recvh.recv_mem(timeout=timeout)
+                    try:
+                        direct_payload = _direct_payload_type(hint)
+                        if direct_payload is None:
+                            # No recognized direct-payload tag means the sender
+                            # used the normal pickle path. mem therefore holds
+                            # a serialized pickle stream, which loads() must
+                            # decode into the original Python object.
+                            payload = self._pickler.loads(mem.get_memview().tobytes())
+                        else:
+                            payload_type, payload_size = direct_payload
+                            # A recognized tag means the sender bypassed pickle
+                            # for a bytes or bytearray payload. The allocation
+                            # holds those raw bytes, so reconstruct the tagged
+                            # Python type directly instead of calling loads().
+                            payload_memview = mem.get_memview()
+                            if payload_size != payload_memview.nbytes:
+                                raise QueueError(
+                                    f"Direct payload size {payload_size} does not match received allocation size "
+                                    f"{payload_memview.nbytes}"
+                                )
+                            if payload_type == _DIRECT_BYTES_HINT:
+                                payload = payload_memview.tobytes()
+                            else:
+                                payload = bytearray(payload_memview)
+                    finally:
+                        mem.free()
+                else:
+                    payload = self._pickler.load(file=fli.PickleReadAdapter(recvh=recvh, timeout=timeout))
 
         except (ChannelEmpty, TimeoutError, EOFError):
             raise queue.Empty
@@ -426,6 +497,9 @@ class Queue:
         :param obj: object to serialize and put
         :param block: Whether to block
         :param timeout: Timeout, if blocking.  None means infinity, default
+        :param flush: When true, wait until a remote queue channel accepts the item.
+            Otherwise, buffered remote queues return after handing the item to
+            the transport layer.
         :return: None
         """
         if self._closed:
@@ -436,9 +510,33 @@ class Queue:
 
         try:
             with self._fli.sendh(stream_channel=stream_channel, timeout=timeout, flush=flush) as sendh:
-                self._pickler.dump(
-                    obj, file=fli.PickleWriteAdapter(sendh=sendh, buffer=self._buffered, timeout=timeout)
-                )
+                direct_payload = _direct_payload(obj, self._pickler) if self._buffered else None
+                if direct_payload is None:
+                    self._pickler.dump(
+                        obj, file=fli.PickleWriteAdapter(sendh=sendh, buffer=self._buffered, timeout=timeout)
+                    )
+                else:
+                    payload, hint = direct_payload
+                    # Allocate the final transport allocation directly. Unlike the generic pickle
+                    # path, there are no FLI fragment buffers to allocate and later consolidate
+                    # into this memory.
+                    mem = self._pool.alloc(len(payload))
+                    try:
+                        payload_memview = mem.get_memview()
+                        if len(payload) != payload_memview.nbytes:
+                            raise QueueError(
+                                f"Direct payload size {len(payload)} does not match allocated memory size "
+                                f"{payload_memview.nbytes}"
+                            )
+                        payload_memview[:] = payload
+                        # send_mem does transfer_of_ownership of the managed memory by default
+                        # which is what we want on this fast path.
+                        sendh.send_mem(mem, arg=hint, timeout=timeout)
+                    except Exception:
+                        # send_mem transfers ownership of mem to FLI/Channels, so free it here
+                        # only if that transfer fails.
+                        mem.free()
+                        raise
 
         except (ChannelFull, TimeoutError):
             raise queue.Full
@@ -522,7 +620,7 @@ class Queue:
         :type timeout: float, optional
         :return: None
         """
-        return self._main_channel.poll(timeout=timeout)
+        return self._poll(timeout=timeout)
 
     def destroy(self) -> None:
         """Destroy the queue immediately."""
@@ -615,7 +713,7 @@ class Queue:
         return self._serialized_fli
 
     @classmethod
-    def attach(cls, serialized_bytes, *, mpool: object = None, pickler = cp) -> object:
+    def attach(cls, serialized_bytes, *, mpool: object = None, pickler=cp) -> object:
         """Attach to a Dragon native Queue from its serialized descriptor.
 
         :param serialized_bytes: The serialized descriptor of the queue.
@@ -650,6 +748,7 @@ class Queue:
         _strm_channels = []
         _fli = fli.FLInterface.attach(b64decode(serialized_bytes), mpool)
         _node_index = None  # Don't set it here. That way we won't talk to GS unless asked to.
+        _pickler_has_loads = hasattr(pickler, "loads")
         _pickler = pickler = cp.dumps(pickler)
 
         new_state = (
@@ -673,5 +772,6 @@ class Queue:
             _pickler,
         )
 
+        new_queue._pickler_has_loads = _pickler_has_loads
         new_queue.__setstate__(new_state)
         return new_queue

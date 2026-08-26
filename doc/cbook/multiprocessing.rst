@@ -1,3 +1,5 @@
+.. _multiprocessing:
+
 Multiprocessing with Dragon
 +++++++++++++++++++++++++++
 

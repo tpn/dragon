@@ -14,7 +14,7 @@ class NodeContext:
 
     In contrast to other resources handled by GS, the NodeContext
     gets its descriptors from the Shepherd started on the node via
-    SHPingGS.
+    LSPingGS.
 
     This class includes the code that does the lifecycle of the
     node to the launcher controlling that channel.
@@ -41,7 +41,7 @@ class NodeContext:
         context from the message.
 
         :param msg: Message send to GS to create the node
-        :type msg: class SHPingGS
+        :type msg: class LSPingGS
         :return: The new node context
         :rtype: class NodeContext
         """

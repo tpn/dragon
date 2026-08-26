@@ -1234,7 +1234,7 @@ dragonError_t _dragon_ddict_attach(const char * dd_ser, dragonDDictDescr_t * dd,
        Streaming requires one extra message per conversation but allow value data to be streamed back
        to the client. */
 
-    // Create stream channel if one's not provided. We need it to send request to orchestrator later to ask for a random manager.
+    // Create stream channel if one's not provided. We need it to send requests to the orchestrator later to ask for a random manager.
     if (str_chser == NULL) {
         err = dragon_create_process_local_channel(&ddict->strm_ch, 0, 0, 0, ddict->timeout);
         if (err != DRAGON_SUCCESS) {
@@ -1247,7 +1247,7 @@ dragonError_t _dragon_ddict_attach(const char * dd_ser, dragonDDictDescr_t * dd,
             append_err_return(err, "Could not attach to externally provided ddict stream channel");
         }
     }
-    // If externally managed channel isn't provided request one be made from LS
+    // If an externally managed channel isn't provided request one be made from LS
     if (resp_chser == NULL) {
         err = dragon_create_process_local_channel(&resp_ch, 0, 0, 0, ddict->timeout);
         if (err != DRAGON_SUCCESS) {

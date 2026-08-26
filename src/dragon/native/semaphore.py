@@ -133,3 +133,19 @@ class Semaphore:
         """
 
         return b64encode(self._channel_sdesc)
+
+    @classmethod
+    def attach(cls, serialized: str):
+        """Attach to a Dragon native Semaphore from its serialized descriptor.
+
+        :param serialized: The serialized, base64 encoded descriptor of the semaphore.
+        :type serialized: str
+        :return: The attached Semaphore object.
+        :rtype: Semaphore
+        """
+
+        new_semaphore = cls.__new__(cls)
+        # The bounded and initial value are only kept for debugging and are not recoverable here.
+        new_semaphore.__setstate__((b64decode(serialized), None, None))
+
+        return new_semaphore

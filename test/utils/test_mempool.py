@@ -83,6 +83,9 @@ class MemPoolTest(unittest.TestCase):
         for mem in allocations:
             mem.free()
 
+    def test_is_local(self):
+        self.assertTrue(self.mpool.is_local)
+
     def test_memory_serialize_attach(self):
         mem1 = self.mpool.alloc(512)
         mem_ser = mem1.serialize()

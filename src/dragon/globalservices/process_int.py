@@ -15,6 +15,7 @@ from ..infrastructure import messages as dmsg
 from ..infrastructure import connection as dconn
 from ..infrastructure import parameters as dp
 from ..infrastructure import util as dutil
+from ..infrastructure.queue import InfraQueue
 from ..infrastructure.policy import Policy
 from ..utils import B64
 
@@ -25,18 +26,19 @@ class ProcessContext:
     """Everything to do with a single process in global services
 
     The methods in this object are used to communicate with
-    the shepherd to which this processes is assigned to
+    the local services to which this processes is assigned to
     manage its lifecycle.
     """
 
-    def __init__(self, *, server, request, reply_channel, p_uid, node, h_uid):
+    def __init__(self, *, server, request, reply_queue, p_uid, node, h_uid):
         self.server = server
         self.request = request
-        self.reply_channel = reply_channel
+        self.reply_queue = reply_queue
         self.node = node
         self.exit_msg = None
         self.destroy_request = None
         self.gs_ret_channel_context = None
+        self.gs_ret_queue = None
         self._descriptor = process_desc.ProcessDescriptor(
             p_uid=p_uid, name=request.user_name, node=node, policy=request.policy, p_p_uid=request.p_uid, h_uid=h_uid
         )
@@ -58,7 +60,7 @@ class ProcessContext:
     def descriptor(self):
         return self._descriptor
 
-    def _mk_sh_proc_create(self, the_tag, which_node):
+    def _mk_ls_proc_create(self, the_tag, which_node):
         the_env = self.request.env
         for k, v in self.process_parms.env().items():
             the_env[k] = v
@@ -68,10 +70,10 @@ class ProcessContext:
             the_env["DRAGON_RESILIENT_RESTART"] = "1"
         # if the parent process wants output or input redirected,
         # we encapsulate necessary messages here to be sent with the
-        # SHProcessCreate. All requests are then handled at once by
+        # LSProcessCreate. All requests are then handled at once by
         # Local Services.
 
-        fake_reply_channel = dutil.AbsorbingChannel()
+        fake_reply_queue = dutil.AbsorbingChannel()
         if self.request.pipesize is not None and self.request.pipesize <= 0:
             capacity = None
         else:
@@ -85,10 +87,11 @@ class ProcessContext:
                 m_uid=dfacts.infrastructure_pool_muid_from_index(which_node),
             )
             _, _, self.gs_ret_channel_context = channel_int.ChannelContext.construct(
-                self.server, req_msg, fake_reply_channel, node_override=self.process_parms.index, send_msg=False
+                self.server, req_msg, fake_reply_queue, node_override=self.process_parms.index, send_msg=False
             )
+            self.gs_ret_queue = self.gs_ret_channel_context.attached_connection
             self.gs_ret_channel_context.incref()
-            gs_ret_chan_msg = self.gs_ret_channel_context.shchannelcreate_msg
+            gs_ret_chan_msg = self.gs_ret_channel_context.lschannelcreate_msg
         else:
             gs_ret_chan_msg = None
 
@@ -106,10 +109,10 @@ class ProcessContext:
                 options=options,
             )
             _, _, self.stdin_context = channel_int.ChannelContext.construct(
-                self.server, req_msg, fake_reply_channel, node_override=self.process_parms.index, send_msg=False
+                self.server, req_msg, fake_reply_queue, node_override=self.process_parms.index, send_msg=False
             )
             self.stdin_context.incref()
-            stdin_msg = self.stdin_context.shchannelcreate_msg
+            stdin_msg = self.stdin_context.lschannelcreate_msg
         else:
             stdin_msg = None
 
@@ -127,10 +130,10 @@ class ProcessContext:
                 options=options,
             )
             _, _, self.stdout_context = channel_int.ChannelContext.construct(
-                self.server, req_msg, fake_reply_channel, node_override=self.process_parms.index, send_msg=False
+                self.server, req_msg, fake_reply_queue, node_override=self.process_parms.index, send_msg=False
             )
             self.stdout_context.incref()
-            stdout_msg = self.stdout_context.shchannelcreate_msg
+            stdout_msg = self.stdout_context.lschannelcreate_msg
         else:
             stdout_msg = None
 
@@ -148,10 +151,10 @@ class ProcessContext:
                 options=options,
             )
             _, _, self.stderr_context = channel_int.ChannelContext.construct(
-                self.server, req_msg, fake_reply_channel, node_override=self.process_parms.index, send_msg=False
+                self.server, req_msg, fake_reply_queue, node_override=self.process_parms.index, send_msg=False
             )
             self.stderr_context.incref()
-            stderr_msg = self.stderr_context.shchannelcreate_msg
+            stderr_msg = self.stderr_context.lschannelcreate_msg
         else:
             stderr_msg = None
 
@@ -169,7 +172,7 @@ class ProcessContext:
         else:
             temp_args = self.request.args
 
-        return dmsg.SHProcessCreate(
+        return dmsg.LSProcessCreate(
             tag=the_tag,
             p_uid=dfacts.GS_PUID,
             r_c_uid=dfacts.GS_INPUT_CUID,
@@ -189,8 +192,8 @@ class ProcessContext:
             gs_ret_chan_msg=gs_ret_chan_msg,
         )  # pylint: disable=protected-access
 
-    def mk_sh_proc_kill(self, the_tag, the_sig=signal.SIGKILL, hide_stderr=False):
-        return dmsg.SHProcessKill(
+    def mk_ls_proc_kill(self, the_tag, the_sig=signal.SIGKILL, hide_stderr=False):
+        return dmsg.LSProcessKill(
             tag=the_tag,
             p_uid=dfacts.GS_PUID,
             r_c_uid=dfacts.GS_INPUT_CUID,
@@ -200,15 +203,15 @@ class ProcessContext:
         )
 
     @classmethod
-    def construct(cls, server, msg, reply_channel, send_msg=True, belongs_to_group=False, addition=False):
+    def construct(cls, server, msg, reply_queue, send_msg=True, belongs_to_group=False, addition=False):
         """Makes a new context, registers it with the server, and sends a request start message
 
         :param server: global server context object
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: GSProcessCreate message
         :type msg: dragon.infrastructure.messages.GSProcessCreate
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :param head: whether this is the head process or not
         :type head: bool
         :param send_msg: whether to issue and send the response message or not, defaults to True
@@ -234,7 +237,8 @@ class ProcessContext:
                         err=dmsg.GSProcessCreateResponse.Errors.ALREADY,
                         desc=existing_ctx.descriptor,
                     )
-                    reply_channel.send(rm.serialize())
+                    # dutil.send_or_put(reply_queue, rm)
+                    reply_queue.put(rm)
                 return False, "already", existing_ctx
 
             this_puid, auto_name = server.new_puid_and_default_name()
@@ -260,10 +264,15 @@ class ProcessContext:
             else:
                 msg.policy = Policy.global_policy()
 
-            which_node, node_huid = server.choose_shepherd(msg)
+            which_node, node_huid = server.choose_localservices(msg)
 
             context = cls(
-                server=server, request=msg, reply_channel=reply_channel, p_uid=this_puid, node=which_node, h_uid=node_huid
+                server=server,
+                request=msg,
+                reply_queue=reply_queue,
+                p_uid=this_puid,
+                node=which_node,
+                h_uid=node_huid,
             )
             server.process_names[msg.user_name] = this_puid
             server.process_table[this_puid] = context
@@ -276,7 +285,7 @@ class ProcessContext:
             outbound_tag = None
 
             context.gs_ret_channel_context = None
-            outbound_tag, context.shprocesscreate_msg = context.send_start(send_msg)
+            outbound_tag, context.lsprocesscreate_msg = context.send_start(send_msg)
 
             # if it does not belong to a group issue a pending completion now
             if not belongs_to_group:
@@ -286,6 +295,7 @@ class ProcessContext:
 
         except Exception as ex:
             import traceback
+
             rm = dmsg.GSProcessCreateResponse(
                 tag=server.tag_inc(),
                 ref=msg.tag,
@@ -293,12 +303,11 @@ class ProcessContext:
                 err_info=str(ex),
             )
             print(f"Got exception {traceback.format_exc()}")
-
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
 
     def send_start(self, send_msg):
         outbound_tag = self.server.tag_inc()
-        shep_req = self._mk_sh_proc_create(outbound_tag, self._descriptor.node)
+        ls_req = self._mk_ls_proc_create(outbound_tag, self._descriptor.node)
 
         if send_msg:
             # In cases where we are sending a large amount of
@@ -310,13 +319,13 @@ class ProcessContext:
             # receiving messages to allow us to process responses
             # on the input queue.
 
-            # send request to shep, remember pending process.
-            shep_hdl = self.server.shep_inputs[self.descriptor.node]
+            # send request to local services, remember pending process.
+            ls_hdl = self.server.ls_inputs[self.descriptor.node]
 
-            self.server.pending_sends.put((shep_hdl, shep_req.serialize()))
-            LOG.debug(f"request {shep_req} to shep")
+            self.server.pending_sends.put((ls_hdl, ls_req))
+            LOG.debug(f"request {ls_req} to local services")
 
-        return outbound_tag, shep_req
+        return outbound_tag, ls_req
 
     def check_channel_const(self, msg):
         """This is the channel construction message - see if that worked and if so
@@ -342,12 +351,13 @@ class ProcessContext:
                 self.server.group_to_pending_resource_map[(self.request.tag, guid)] = self
                 group_context._construction_helper(rm)
             else:
-                self.reply_channel.send(rm.serialize())
+                self.reply_queue.put(rm)
             return
 
         sdesc = self.gs_ret_channel_context.descriptor.sdesc
-
-        self.process_parms.gs_ret_cd = B64.bytes_to_str(sdesc)
+        ch = dch.Channel.attach(sdesc)
+        q = InfraQueue(main_channel=ch)
+        self.process_parms.gs_ret_qd = q.serialize()
 
         outbound_tag = self.send_start()
         if self.belongs_to_group:
@@ -377,10 +387,12 @@ class ProcessContext:
 
         dsd = self.gs_ret_channel_context.descriptor.sdesc
         ping_chan = dch.Channel.attach(dsd)
-        ping_con = dconn.Connection(outbound_initializer=ping_chan, policy=dp.POLICY_INFRASTRUCTURE)
-        self.gs_ret_channel_context.attached_connection = ping_con
-        ping_con.send(pingmsg.serialize())
+        ping_q = InfraQueue(main_channel=ping_chan)
+        self.gs_ret_channel_context.attached_connection = ping_q
+        ping_q.put(pingmsg)
         LOG.debug("ping sent, channel and connection kept for later")
+        #TODO: CPW maybe need to do some channels clean up here?
+
         # note that if the argdata mode is ArgMode.PYTHON_CHANNEL the
         # starting process will be using this channel to deliver the argdata
         # directly.  There is no race because this must be complete before
@@ -389,15 +401,15 @@ class ProcessContext:
     def complete_construction(self, msg, send_msg=True):
         """Completes construction of a new managed process
 
-        :param msg: SHProcessCreateResponse message
-        :type msg: SHProcessCreateResponse
+        :param msg: LSProcessCreateResponse message
+        :type msg: LSProcessCreateResponse
         :param send_msg: whether to send the response message or not, defaults to True
         :type send_msg: bool, optional
         :raises RuntimeError: when the message error is of unknown type
         :return: True or False according to success
         :rtype: bool
         """
-        if dmsg.SHProcessCreateResponse.Errors.SUCCESS == msg.err:
+        if dmsg.LSProcessCreateResponse.Errors.SUCCESS == msg.err:
             self.descriptor.state = process_desc.ProcessDescriptor.State.ACTIVE
 
             if self.gs_ret_channel_context is not None:
@@ -414,7 +426,7 @@ class ProcessContext:
                             err=dmsg.GSProcessCreateResponse.Errors.FAIL,
                             err_info=err_msg,
                         )
-                        self.reply_channel.send(rm.serialize())
+                        self.reply_queue.put(rm)
                     return False
 
             if self.stdin_context is not None:
@@ -431,7 +443,7 @@ class ProcessContext:
                             err=dmsg.GSProcessCreateResponse.Errors.FAIL,
                             err_info=err_msg,
                         )
-                        self.reply_channel.send(rm.serialize())
+                        self.reply_queue.put(rm)
                     return False
 
                 # After line below, refcnt is 2. This is necessary to keep the channel from
@@ -457,7 +469,7 @@ class ProcessContext:
                             err=dmsg.GSProcessCreateResponse.Errors.FAIL,
                             err_info=err_msg,
                         )
-                        self.reply_channel.send(rm.serialize())
+                        self.reply_queue.put(rm)
                     return False
 
                 # After line below, refcnt is 2. This is necessary to keep the channel from
@@ -483,7 +495,7 @@ class ProcessContext:
                             err=dmsg.GSProcessCreateResponse.Errors.FAIL,
                             err_info=err_msg,
                         )
-                        self.reply_channel.send(rm.serialize())
+                        self.reply_queue.put(rm)
                     return False
 
                 # After line below, refcnt is 2. This is necessary to keep the channel from
@@ -514,9 +526,9 @@ class ProcessContext:
                     err=dmsg.GSProcessCreateResponse.Errors.SUCCESS,
                     desc=self.descriptor,
                 )
-                self.reply_channel.send(response.serialize())
+                self.reply_queue.put(response)
             succeeded = True
-        elif dmsg.SHProcessCreateResponse.Errors.FAIL == msg.err:
+        elif dmsg.LSProcessCreateResponse.Errors.FAIL == msg.err:
             self.descriptor.state = process_desc.ProcessDescriptor.State.DEAD
 
             # clean up tables - don't keep ProcessDescriptor stuff around
@@ -548,7 +560,7 @@ class ProcessContext:
                     err=dmsg.GSProcessCreateResponse.Errors.FAIL,
                     err_info=msg.err_info,
                 )
-                self.reply_channel.send(response.serialize())
+                self.reply_queue.put(response)
             succeeded = False
         else:
             raise RuntimeError(f"got {msg!s} err {msg.err} unknown")
@@ -559,13 +571,13 @@ class ProcessContext:
         return succeeded
 
     @staticmethod
-    def kill(server, msg, reply_channel, belongs_to_group=False, send_msg=True):
+    def kill(server, msg, reply_queue, belongs_to_group=False, send_msg=True):
         """Kill the given process
 
         :param msg: GSProcessKill request
         :type msg: GSProcessKill
-        :param reply_channel: Reply channel optionally used to send GSProcessKillResponse
-        :type reply_channel: Connection
+        :param reply_queue: Reply channel optionally used to send GSProcessKillResponse
+        :type reply_queue: Connection
         :param belongs_to_group: Whether the process belongs to a dragon Group. Defaults to False.
         :type belongs_to_group: bool, optional
         :param send_msg: whether to send the request message or not, defaults to True
@@ -584,7 +596,7 @@ class ProcessContext:
             LOG.debug("process absent %s", msg)
             if send_msg:
                 rm = gspkr(tag=server.tag_inc(), ref=msg.tag, err=gspkr.Errors.UNKNOWN, err_info=errmsg)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug("sent response %s", rm)
             return False, None
         else:
@@ -595,7 +607,7 @@ class ProcessContext:
                 LOG.debug("process dead %s", msg)
                 if send_msg:
                     rm = gspkr(tag=server.tag_inc(), ref=msg.tag, err=gspkr.Errors.DEAD, exit_code=pdesc.ecode)
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug("sent response %s", rm)
                 return False, None
 
@@ -613,31 +625,32 @@ class ProcessContext:
                         err=gspkr.Errors.PENDING,
                         err_info=f"process {target_uid} is pending",
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug("sent response %s", rm)
                 return False, None
             elif pds.ACTIVE == pdesc.state:
                 pctx.descriptor.state = pds.PENDING
                 pctx.destroy_request = msg
-                pctx.reply_channel = reply_channel
+                pctx.reply_queue = reply_queue
                 the_tag = server.tag_inc()
-                pctx.shep_kill_msg = pctx.mk_sh_proc_kill(the_tag, msg.sig, msg.hide_stderr)
+                pctx.ls_kill_msg = pctx.mk_ls_proc_kill(the_tag, msg.sig, msg.hide_stderr)
                 target_node = pdesc.node
                 if not belongs_to_group:
                     server.pending[the_tag] = pctx.complete_kill
 
                 if send_msg:
-                    server.pending_sends.put((server.shep_inputs[target_node], pctx.shep_kill_msg.serialize()))
-                    LOG.debug(f"kill {msg} sent to shep as {pctx.shep_kill_msg} on node {target_node}")
+                    ls_hdl = server.ls_inputs[target_node]
+                    server.pending_sends.put((ls_hdl, pctx.ls_kill_msg))
+                    LOG.debug(f"kill {msg} sent to local services as {pctx.ls_kill_msg} on node {target_node}")
                 return True, the_tag
             else:
                 raise NotImplementedError("close case")
 
     def complete_kill(self, msg):
         gspkr = dmsg.GSProcessKillResponse
-        shpkr = dmsg.SHProcessKillResponse
+        lspkr = dmsg.LSProcessKillResponse
 
-        if shpkr.Errors.FAIL == msg.err:
+        if lspkr.Errors.FAIL == msg.err:
             rm = gspkr(
                 tag=self.server.tag_inc(),
                 ref=self.destroy_request.tag,
@@ -645,7 +658,7 @@ class ProcessContext:
                 err_info=msg.err_info,
             )
             kill_succeeded = False
-        elif shpkr.Errors.SUCCESS == msg.err:
+        elif lspkr.Errors.SUCCESS == msg.err:
             rm = gspkr(tag=self.server.tag_inc(), ref=self.destroy_request.tag, err=gspkr.Errors.SUCCESS)
 
             kill_succeeded = True
@@ -656,5 +669,5 @@ class ProcessContext:
             self.descriptor.state = self.descriptor.State.ACTIVE
 
         LOG.debug(f"sending kill response to request {self.destroy_request}: {rm}")
-        self.reply_channel.send(rm.serialize())
+        self.reply_queue.put(rm)
         return kill_succeeded

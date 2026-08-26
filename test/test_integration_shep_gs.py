@@ -39,6 +39,7 @@ import dragon.infrastructure.util as dutil
 
 import dragon.localservices.local_svc as dsls
 import dragon.dlogging.util as dlog
+from dragon.infrastructure.queue import InfraQueue
 
 import support.util as tsu
 
@@ -91,6 +92,7 @@ def start_ls(shep_stdin_queue, shep_stdout_queue, env_update, name_addition=""):
         log.exception("runtime failure\n")
         shep_stdout_queue.send(dmsg.AbnormalTermination(tag=dsls.get_new_tag(), err_info=f"{rte!s}").serialize())
     finally:
+        log.exception("closing queues\n")
         shep_stdin_queue.close()
         shep_stdout_queue.close()
 
@@ -124,7 +126,7 @@ class GSLS(unittest.TestCase):
 
         self.gs_return_cuid = 2**64 - CUSTOM_POOL_MUID
         self.proc_gs_return_chan = dch.Channel(self.test_pool, self.gs_return_cuid)
-        self.proc_gs_return_rh = dconn.Connection(inbound_initializer=self.proc_gs_return_chan)
+        self.proc_gs_return_q = InfraQueue(pool=self.test_pool, main_channel=self.proc_gs_return_chan)
 
         self.chatty_teardown = False
         self.proc_direct_test_failed = False
@@ -139,7 +141,7 @@ class GSLS(unittest.TestCase):
 
         # Make a list of channels to pass thru the environment to GS for testing purposes.
         test_chan_list = [
-            (self.gs_return_cuid, self.test_pool.serialize(), self.proc_gs_return_chan.serialize(), False)
+            (self.gs_return_cuid, self.proc_gs_return_q.serialize())
         ]
 
         val = pickle.dumps(test_chan_list)
@@ -153,37 +155,34 @@ class GSLS(unittest.TestCase):
 
         self.ls_dut.start()
 
-        self.shep_stdin_wh.send(dmsg.BENodeIdxSH(tag=self.next_tag(), node_idx=0, net_conf_key="0").serialize())
+        self.shep_stdin_wh.send(dmsg.BENodeIdxLS(tag=self.next_tag(), node_idx=0, net_conf_key="0").serialize())
 
-        ping_be_msg = tsu.get_and_check_type(self.shep_stdout_rh, dmsg.SHPingBE)
+        ping_be_msg = tsu.get_and_check_type(self.shep_stdout_rh, dmsg.LSPingBE)
 
         env2b = dutils.B64.str_to_bytes
 
         self.inf_pool = dmm.MemoryPool.attach(env2b(ping_be_msg.inf_pd))
 
-        self.shep_input_chan = dch.Channel.attach(env2b(ping_be_msg.shep_cd))
-        self.shep_input_wh = dconn.Connection(outbound_initializer=self.shep_input_chan)
+        # ls_cd, be_cd, gs_qd are InfraQueue descriptors
+        self.ls_input_wh = InfraQueue.attach(ping_be_msg.ls_cd)
+        self.bela_input_rh = InfraQueue.attach(ping_be_msg.be_cd)
+        self.gs_input_wh = InfraQueue.attach(ping_be_msg.gs_qd)
 
-        self.bela_input_chan = dch.Channel.attach(env2b(ping_be_msg.be_cd))
-        self.bela_input_rh = dconn.Connection(inbound_initializer=self.bela_input_chan)
-
-        self.gs_input_chan = dch.Channel.attach(env2b(ping_be_msg.gs_cd))
-        self.gs_input_wh = dconn.Connection(outbound_initializer=self.gs_input_chan)
 
         dapi.test_connection_override(
             test_gs_input=self.gs_input_wh,
-            test_gs_return=self.proc_gs_return_rh,
+            test_gs_return=self.proc_gs_return_q,
             test_gs_return_cuid=self.gs_return_cuid,
-            test_shep_input=self.shep_input_wh,
+            test_ls_input=self.ls_input_wh,
         )
 
-        self.shep_input_wh.send(dmsg.BEPingSH(tag=self.next_tag()).serialize())
+        self.ls_input_wh.put(dmsg.BEPingLS(tag=self.next_tag()))
 
-        sh_msg = tsu.get_and_check_type(self.bela_input_rh, dmsg.SHChannelsUp)
-        self.assertIsInstance(sh_msg, dmsg.SHChannelsUp)
+        sh_msg = tsu.get_and_check_type(self.bela_input_rh, dmsg.LSChannelsUp)
+        self.assertIsInstance(sh_msg, dmsg.LSChannelsUp)
         self.assertEqual(dutils.host_id(), sh_msg.node_desc.host_id)
         if self.chatty_teardown:
-            print(f"info from SHChannelsUp: host_id={sh_msg.node_desc.host_id}, hostname={sh_msg.node_desc.host_name}")
+            print(f"info from LSChannelsUp: host_id={sh_msg.node_desc.host_id}, hostname={sh_msg.node_desc.host_name}")
             sys.stdout.flush()
 
         tsu.get_and_check_type(self.bela_input_rh, dmsg.GSIsUp)
@@ -191,30 +190,31 @@ class GSLS(unittest.TestCase):
         self.starting_shm = dutil.survey_dev_shm()
 
     def tearDown(self) -> None:
-        self.gs_input_wh.send(dmsg.GSTeardown(tag=self.next_tag()).serialize())
+        self.gs_input_wh.put(dmsg.GSTeardown(tag=self.next_tag()))
         if self.chatty_teardown:
             print("sent GSTeardown")
             sys.stdout.flush()
 
-        tsu.get_and_check_several_ignore_SHFwdOutput(self, self.bela_input_rh, {dmsg.GSHalted: 1})
+        tsu.q_get_and_check_several_ignore_LSFwdOutput(self, self.bela_input_rh, {dmsg.GSHalted: 1})
         if self.chatty_teardown:
             print("got GSHalted")
             sys.stdout.flush()
 
-        self.shep_input_wh.send(dmsg.SHTeardown(tag=self.next_tag()).serialize())
+        self.ls_input_wh.put(dmsg.LSTeardown(tag=self.next_tag()))
         if self.chatty_teardown:
-            print("sent SHTeardown")
+            print("sent LSTeardown")
             sys.stdout.flush()
 
-        tsu.get_and_check_several_ignore_SHFwdOutput(self, self.bela_input_rh, {dmsg.SHHaltBE: 1})
+        tsu.q_get_and_check_several_ignore_LSFwdOutput(self, self.bela_input_rh, {dmsg.LSHaltBE: 1})
         if self.chatty_teardown:
-            print("got SHHaltBE")
+            print("got LSHaltBE")
             sys.stdout.flush()
 
-        self.shep_input_chan.detach()
-        self.bela_input_chan.detach()
-        self.gs_input_chan.detach()
+        self.ls_input_wh.close()
+        self.bela_input_rh.close()
+        self.gs_input_wh.close()
 
+        self.proc_gs_return_q.close()
         self.proc_gs_return_chan.destroy()
 
         # When ref counting works this should detach.
@@ -222,9 +222,9 @@ class GSLS(unittest.TestCase):
 
         self.shep_stdin_wh.send(dmsg.BEHalted(tag=self.next_tag()).serialize())
 
-        tsu.get_and_check_several_ignore_SHFwdOutput(self, self.shep_stdout_rh, {dmsg.SHHalted: 1})
+        tsu.get_and_check_several_ignore_LSFwdOutput(self, self.shep_stdout_rh, {dmsg.LSHalted: 1})
 
-        # We can safely destroy and detach for sure once we have receieved SHHalted. If it fails,
+        # We can safely destroy and detach for sure once we have receieved LSHalted. If it fails,
         # the detach above worked.
         try:
             self.inf_pool.destroy()
@@ -260,13 +260,13 @@ class GSLS(unittest.TestCase):
             sig=signal.SIGKILL,
             t_p_uid=self.head_puid,
         )
-        self.gs_input_wh.send(msg.serialize())
+        self.gs_input_wh.put(msg)
 
         # Since the backend can still be receiving messages from LS,
-        # discard its SHFwdOutput messages that still may be in the channel
+        # discard its LSFwdOutput messages that still may be in the channel
         # queue
         msg = tsu.get_and_parse(self.bela_input_rh)
-        while isinstance(msg, dmsg.SHFwdOutput):
+        while isinstance(msg, dmsg.LSFwdOutput):
             msg = tsu.get_and_parse(self.bela_input_rh)
 
         if isinstance(msg, dmsg.GSProcessKillResponse):
@@ -278,7 +278,7 @@ class GSLS(unittest.TestCase):
     def start_sleepy_head(self, timeout):
         msg = mk_sleep_msg(timeout, self.next_tag(), p_uid=dfacts.LAUNCHER_PUID, r_c_uid=dfacts.BASE_BE_CUID)
 
-        self.gs_input_wh.send(msg.serialize())
+        self.gs_input_wh.put(msg)
 
         resp = tsu.get_and_check_type(self.bela_input_rh, dmsg.GSProcessCreateResponse)
 
@@ -302,21 +302,21 @@ class GSLS(unittest.TestCase):
             head_proc=True,
         )
 
-        self.gs_input_wh.send(msg.serialize())
+        self.gs_input_wh.put(msg)
 
-        # Expect a GSPCR, a SHFwdOutput, and a GSHeadExit message where
+        # Expect a GSPCR, a LSFwdOutput, and a GSHeadExit message where
         # the output could be in any order but the PCR will precede
         # the HeadExit.
 
-        msgs = tsu.get_and_check_several_ignore_SHFwdOutput(
+        msgs = tsu.q_get_and_check_several_ignore_LSFwdOutput(
             self, self.bela_input_rh, {dmsg.GSProcessCreateResponse: 1, dmsg.GSHeadExit: 1}
         )
 
         pcr_msg, _ = msgs[dmsg.GSProcessCreateResponse][0]
         self.assertEqual(pcr_msg.err, dmsg.GSProcessCreateResponse.Errors.SUCCESS)
 
-        if len(msgs[dmsg.SHFwdOutput]) > 0:
-            output_msg, _ = msgs[dmsg.SHFwdOutput][0]
+        if len(msgs[dmsg.LSFwdOutput]) > 0:
+            output_msg, _ = msgs[dmsg.LSFwdOutput][0]
             self.assertEqual(echotxt + "\n", output_msg.data)
         self.proc_direct_test_failed = False
 
@@ -332,17 +332,17 @@ class GSLS(unittest.TestCase):
 
         output = "hyenas are awesome"
         msg = mk_slow_echo_msg(1, output, self.next_tag(), p_uid=dfacts.LAUNCHER_PUID, r_c_uid=dfacts.BASE_BE_CUID)
-        self.gs_input_wh.send(msg.serialize())
+        self.gs_input_wh.put(msg)
 
-        msgs = tsu.get_and_check_several_ignore_SHFwdOutput(
+        msgs = tsu.q_get_and_check_several_ignore_LSFwdOutput(
             self, self.bela_input_rh, {dmsg.GSProcessCreateResponse: 1, dmsg.GSHeadExit: 1}
         )
 
         create_msg, create_order = msgs[dmsg.GSProcessCreateResponse][0]
         self.assertEqual(create_msg.err, dmsg.GSProcessCreateResponse.Errors.SUCCESS)
 
-        if len(msgs[dmsg.SHFwdOutput]) > 0:
-            output_msg, _ = msgs[dmsg.SHFwdOutput][0]
+        if len(msgs[dmsg.LSFwdOutput]) > 0:
+            output_msg, _ = msgs[dmsg.LSFwdOutput][0]
             self.assertEqual(output + "\n", output_msg.data)
 
     def test_head_kill(self):
@@ -365,7 +365,7 @@ class GSLS(unittest.TestCase):
         res = dproc.create(exe=SLOW_ECHO, run_dir="", args=["10", "hyena"], env={}, user_name="hproc")
         self.assertEqual(res.name, "hproc")
 
-        resp = tsu.get_and_check_type(self.bela_input_rh, dmsg.SHFwdOutput, 3)
+        resp = tsu.get_and_check_type(self.bela_input_rh, dmsg.LSFwdOutput, 3)
         self.assertEqual("hyena\n", resp.data)
         self.kill_sleepy_head()
 

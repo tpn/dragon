@@ -1,6 +1,20 @@
 import threading
 from functools import wraps
 
+from dragon.infrastructure import messages as dmsg
+from dragon.launcher.util import next_tag
+
+
+class _GarbageMsg(dmsg.InfraMsg):
+    """Wrapper to inject garbage bytes into a DQueue with MessagePickler."""
+
+    def __init__(self, data):
+        super().__init__(next_tag())
+        self._data = data.encode() if isinstance(data, str) else data
+
+    def serialize(self):
+        return self._data
+
 
 def catch_thread_exceptions(func):
     @wraps(func)

@@ -8,9 +8,10 @@ import sys
 import time
 import threading
 
-from queue import Queue
+from queue import Queue, Empty as qEmpty
 from .. import channels as dch
 
+from ..infrastructure.queue import InfraQueue
 from ..infrastructure import channel_desc
 from ..infrastructure import pool_desc
 from ..infrastructure import process_desc
@@ -31,7 +32,6 @@ from ..infrastructure.policy import Policy
 from ..infrastructure import facts as dfacts
 from ..infrastructure import messages as dmsg
 from ..infrastructure import util as dutil
-from ..infrastructure import connection as dconn
 from ..infrastructure import parameters as dparm
 from ..dlogging import util as dlog
 from ..dlogging.util import DragonLoggingServices as dls
@@ -85,7 +85,7 @@ class GlobalContext(object):
         self.channel_table = dict()  # key = c_uid, value = ChannelContext
         self.pool_table = dict()  # key = m_uid, value = PoolContext
         self.node_table = dict()  # key = h_uid, value = NodeContext
-        self.node_idx_to_huid = dict() # key = ls_index, value = h_uid
+        self.node_idx_to_huid = dict()  # key = ls_index, value = h_uid
         self.group_table = dict()  # key = g_uid, value = GroupContext
 
         self.process_names = dict()  # key = name, value = p_uid
@@ -116,7 +116,7 @@ class GlobalContext(object):
         self.pending_group_destroy = (
             dict()
         )  # is applied only to groups of resources when destroy is called, key = uid, value = continuation on response
-        self.pending_process_exits = dict()  # key = creation msg tag, value = SHProcessExit msg
+        self.pending_process_exits = {}  # key = creation msg tag, value = LSProcessExit msg
 
         self.pending_sends = Queue()
 
@@ -131,8 +131,8 @@ class GlobalContext(object):
         )  # this is a dict of dicts that holds the p_uid status for every muti-join wait request
         # key is a tuple with of (msg.tag, msg.p_uid) and value is a dict with: key = p_uid and val = (status, info)
 
-        self.sh_pings_recvd = 0  # added to as we receive the sh pings
-        self.shep_inputs = [None]
+        self.ls_pings_recvd = 0  # added to as we receive the ls pings
+        self.ls_inputs = [None]
         self.gs_input = None
         self.bela_input = None
         self.test_connections = None
@@ -160,9 +160,9 @@ class GlobalContext(object):
         self._node_logger = logging.getLogger(dls.GS).getChild("node:")
         self._group_logger = logging.getLogger(dls.GS).getChild("group:")
 
-        self.circ_index = 0  # helper index for implementing the circular order of choosing shepherds
+        self.circ_index = 0  # helper index for implementing the circular order of choosing local services
 
-        self.process_policy_evaluator = None  # Process Placement Policy Evaluator, init'd in `handle_sh_ping`
+        self.process_policy_evaluator = None  # Process Placement Policy Evaluator, init'd in `handle_ls_ping`
         self.channel_policy_evaluator = None  # Separate Evaluator for Channel Placement.
         self.resilient_groups = (
             False  # Whether to handle Groups as if they are a group of individually critical processes
@@ -240,11 +240,9 @@ class GlobalContext(object):
         if self.gs_input is None:
             return None
 
-        # TODO: consider reworking call interface considering
-        # single message assumption
-        if self.gs_input.poll(timeout):
-            rv = dmsg.parse(self.gs_input.recv())  # blocking recv
-        else:
+        try:
+            rv = self.gs_input.get(timeout=timeout)
+        except qEmpty:
             rv = None
 
         return rv
@@ -266,9 +264,9 @@ class GlobalContext(object):
             elif dfacts.BASE_BE_CUID <= msg.r_c_uid < (dfacts.BASE_BE_CUID + dfacts.RANGE_BE_CUID):
                 log.debug("this is bela")
                 return self.bela_input
-            elif dfacts.BASE_SHEP_CUID <= msg.r_c_uid < (dfacts.BASE_SHEP_CUID + dfacts.RANGE_SHEP_CUID):
-                log.debug("this is shep")
-                return self.shep_inputs[dfacts.index_from_shepherd_cuid(msg.r_c_uid)]
+            elif dfacts.BASE_LS_CUID <= msg.r_c_uid < (dfacts.BASE_LS_CUID + dfacts.RANGE_LS_CUID):
+                log.debug("this is local services")
+                return self.ls_inputs[dfacts.index_from_localservices_cuid(msg.r_c_uid)]
             elif self.test_connections and msg.r_c_uid in self.test_connections:
                 log.debug("this is test connections")
                 return self.test_connections[msg.r_c_uid]
@@ -276,16 +274,7 @@ class GlobalContext(object):
                 # TODO PE-37246 GS Channel attachment ageing policy
                 context = self.channel_table[msg.r_c_uid]
                 if context.attached_connection is None:
-                    underlying_channel = dch.Channel.attach(context.descriptor.sdesc)
-
-                    if context.is_reading:
-                        context.attached_connection = dconn.Connection(
-                            inbound_initializer=underlying_channel, policy=dparm.POLICY_INFRASTRUCTURE
-                        )
-                    else:
-                        context.attached_connection = dconn.Connection(
-                            outbound_initializer=underlying_channel, policy=dparm.POLICY_INFRASTRUCTURE
-                        )
+                    context.attached_connection = InfraQueue.attach(context.descriptor.sdesc)
 
                 log.debug("this is context and channel_table")
                 return context.attached_connection
@@ -297,9 +286,9 @@ class GlobalContext(object):
     # TODO: design/collaboration approach for placement
     # interfaces.  tickets to follow...
 
-    def choose_shepherd(self, msg: dmsg.GSProcessCreate):
+    def choose_localservices(self, msg: dmsg.GSProcessCreate):
         """
-        Pick the shepherd to launch a process on. If the GSProcessCreate
+        Pick the local service to launch a process on. If the GSProcessCreate
         request includes a ResourceLayout request, use that. Otherwise,
         roundrobin the placement across the available nodes.
         """
@@ -308,7 +297,7 @@ class GlobalContext(object):
 
         if not msg.layout:
             index = self.circ_index
-            self.circ_index = (self.circ_index + 1) % len(self.shep_inputs)
+            self.circ_index = (self.circ_index + 1) % len(self.ls_inputs)
         else:
             assert isinstance(msg.layout, ResourceLayout)
             assert msg.layout.h_uid in self.node_table
@@ -317,7 +306,7 @@ class GlobalContext(object):
         # Get huid for ProcessDescriptor
         huid = self.node_idx_to_huid[index]
 
-        log.debug("choose shepherd %d (huid %d) for %s", index, huid, msg)
+        log.debug("choose local service %d (huid %d) for %s", index, huid, msg)
         return index, huid
 
     # picks the node to put a pool on
@@ -463,7 +452,7 @@ class GlobalContext(object):
             p_uid, req_msg = join_request
             reply_channel = self.get_reply_handle(req_msg)
             rm = gspjr(tag=self.tag_inc(), ref=req_msg.tag, err=gspjr.Errors.TIMEOUT)
-            reply_channel.send(rm.serialize())
+            reply_channel.put(rm)
             self.pending_join.remove_one(p_uid, req_msg)
             log.debug(f"timed out join response to {req_msg!s}: {rm!s}")
 
@@ -481,7 +470,7 @@ class GlobalContext(object):
                 ref=req_msg.tag,
                 puid_status=self.puid_join_list_status[(req_msg.tag, req_msg.p_uid)],
             )
-            reply_channel.send(rm.serialize())
+            reply_channel.put(rm)
             self.pending_join_list.remove_one(p_uid_list, req_msg)
             del self.puid_join_list_status[(req_msg.tag, req_msg.p_uid)]  # we are done with this msg req
 
@@ -492,7 +481,7 @@ class GlobalContext(object):
             name, req_msg = channel_join_request
             reply_channel = self.get_reply_handle(req_msg)
             rm = gscjr(tag=self.tag_inc(), ref=req_msg.tag, err=gscjr.Errors.TIMEOUT)
-            reply_channel.send(rm.serialize())
+            reply_channel.put(rm)
             self.pending_channel_joins.remove_one(name, req_msg)
             log.debug(f"timed out join response to {req_msg!s}: {rm!s}")
 
@@ -525,7 +514,7 @@ class GlobalContext(object):
         self,
         mode=LaunchModes.SINGLE,
         test_gs_input=None,
-        test_shep_inputs=None,
+        test_ls_inputs=None,
         test_bela_input=None,
         test_gs_stdout=None,
         test_conns=None,
@@ -539,7 +528,7 @@ class GlobalContext(object):
 
         :param mode: How are we running this
         :param test_gs_input: Global Services input handle
-        :param test_shep_inputs: List of shepherd handles for the whole allocation.
+        :param test_ls_inputs: List of local services handles for the whole allocation.
         :param test_gs_stdout: Global Services stdout message handle
         :param test_bela_input: Backend/Launcher input handle.
         :param test_conns: a c_uid keyed dictionary of test channel handles
@@ -554,8 +543,8 @@ class GlobalContext(object):
         if test_gs_input is not None:
             self.gs_input = test_gs_input
 
-        if test_shep_inputs is not None:
-            self.shep_inputs = test_shep_inputs
+        if test_ls_inputs is not None:
+            self.ls_inputs = test_ls_inputs
 
         if test_bela_input is not None:
             self.bela_input = test_bela_input
@@ -576,9 +565,10 @@ class GlobalContext(object):
 
                 while self.pending_sends.qsize() > 0 and not self.gs_input.poll(timeout=0):
                     chan, msg = self.pending_sends.get()
-                    chan.send(msg)
+                    chan.put(msg)
 
                 next_timeout = self.do_timeouts()
+
             else:
                 next_timeout = None
 
@@ -593,7 +583,7 @@ class GlobalContext(object):
         self,
         mode=LaunchModes.SINGLE,
         test_gs_input=None,
-        test_shep_inputs=None,
+        test_ls_inputs=None,
         test_bela_input=None,
         test_gs_stdout=None,
     ):
@@ -606,7 +596,7 @@ class GlobalContext(object):
         for instance tests.
 
         :param mode: How are we bringing this up
-        :param test_shep_inputs: List of shepherd handles for the whole allocation.
+        :param test_ls_inputs: List of local services handles for the whole allocation.
         :param test_gs_input: Global Services input handle
         :param test_bela_input: Launcher/back end input handle
         :param test_gs_stdout: Global Services stdout message handle
@@ -616,35 +606,35 @@ class GlobalContext(object):
         self._launch_mode = mode
 
         if self.LaunchModes.SINGLE == self._launch_mode:
-            self.shep_inputs, self.gs_input, self.bela_input, self.num_nodes = startup.startup_single(self)
+            self.ls_inputs, self.gs_input, self.bela_input, self.num_nodes = startup.startup_single(self)
         elif self.LaunchModes.MULTI == self._launch_mode:
-            self.shep_inputs, self.gs_input, self.bela_input, self.num_nodes = startup.startup_multi(self)
+            self.ls_inputs, self.gs_input, self.bela_input, self.num_nodes = startup.startup_multi(self)
         elif self.LaunchModes.TEST_STANDALONE_SINGLE == self._launch_mode:
-            if test_shep_inputs is None:
-                test_shep_inputs = [None]
+            if test_ls_inputs is None:
+                test_ls_inputs = [None]
 
-            my_inputs = startup.startup_single(self, test_gs_input, test_shep_inputs[0], test_bela_input)
+            my_inputs = startup.startup_single(self, test_gs_input, test_ls_inputs[0], test_bela_input)
 
-            self.shep_inputs, self.gs_input, self.bela_input, self.num_nodes = my_inputs
+            self.ls_inputs, self.gs_input, self.bela_input, self.num_nodes = my_inputs
 
         elif self.LaunchModes.TEST_STANDALONE_MULTI == self._launch_mode:
-            my_inputs = startup.startup_multi(self, test_gs_input, test_shep_inputs, test_bela_input)
-            self.shep_inputs, self.gs_input, self.bela_input, self.num_nodes = my_inputs
+            my_inputs = startup.startup_multi(self, test_gs_input, test_ls_inputs, test_bela_input)
+            self.ls_inputs, self.gs_input, self.bela_input, self.num_nodes = my_inputs
         else:
             raise NotImplementedError("unknown mode")
 
-    def add_node_from_SHPingGS(self, msg) -> None:
+    def add_node_from_LSPingGS(self, msg) -> None:
         """Create node contexts and h_uids from the node descriptors we have received
-        from LS during startup via SHPingGS.
+        from LS during startup via LSPingGS.
 
-        :param messages: SHPingGS messages received during startup sequence
+        :param messages: LSPingGS messages received during startup sequence
         """
         ctx = NodeContext.construct(msg)
 
         # Add a 0 - nnodes-1 index. As of 9/3/2025, this index is only used for
         # ensuring PMIx servers are assigned a unique 0 - nnodes-1 ID that will
         # remain the same during the runtime's life
-        ctx.g_idx = self.sh_pings_recvd
+        ctx.g_idx = self.ls_pings_recvd
         self.node_table[ctx.h_uid] = ctx
         self.node_idx_to_huid[ctx.ls_index] = ctx.h_uid
         self.node_names[ctx.name] = ctx.h_uid
@@ -659,15 +649,16 @@ class GlobalContext(object):
         log = logging.getLogger("teardown_detach")
 
         real_channels = []
-        if isinstance(self.gs_input, dconn.Connection):
-            real_channels.append(self.gs_input)
+        real_queues = []
+        if isinstance(self.gs_input, InfraQueue):
+            real_queues.append(self.gs_input)
 
-        for shep in self.shep_inputs:
-            if isinstance(shep, dconn.Connection):
-                real_channels.append(shep)
+        for ls in self.ls_inputs:
+            if isinstance(ls, InfraQueue):
+                real_queues.append(ls)
 
-        if isinstance(self.bela_input, dconn.Connection):
-            real_channels.append(self.bela_input)
+        if isinstance(self.bela_input, InfraQueue):
+            real_queues.append(self.bela_input)
 
         if not real_channels:
             return
@@ -684,16 +675,20 @@ class GlobalContext(object):
             if ch.inbound_chan is not None:
                 ch.inbound_chan.detach()
 
+        for q in real_queues:
+            del q
+        del real_queues
+
         log.debug("channels detached")
 
-    def run_teardown(self, test_gs_input=None, test_shep_inputs=None, test_bela_input=None, test_gs_stdout=None):
+    def run_teardown(self, test_gs_input=None, test_ls_inputs=None, test_bela_input=None, test_gs_stdout=None):
         """Complete teardown activities with other actors.
 
         Normal exit = happy path
         Exception indicates a failure
 
         :param test_gs_input: Global Services input handle
-        :param test_shep_inputs: list of shepherd handles for the whole allocation.
+        :param test_ls_inputs: list of local services handles for the whole allocation.
         :param test_gs_stdout: Global Services stdout message handle
         :param test_bela_input: Back end/launcher message input handle
         """
@@ -714,30 +709,33 @@ class GlobalContext(object):
 
         self.detach_from_channels()
         log.debug("detached from channels")
-
-        self.msg_stdout.send(dmsg.GSHalted(tag=gait()).serialize())
-        log.info(f"gs sent GSHalted to primary shep via stdout")
+        if isinstance(self.msg_stdout, InfraQueue):
+            self.msg_stdout.put(dmsg.GSHalted(tag=gait()))
+            log.info("gs sent GSHalted to primary local service via InfraQueue (used in single_thread) mode")
+        else:
+            self.msg_stdout.send(dmsg.GSHalted(tag=gait()).serialize())
+            log.info("gs sent GSHalted to primary local service via stdout")
 
         log.info("teardown complete")
 
     ################ Message Handlers for GS #######################################
-    @dutil.route(dmsg.SHPingGS, DTBL)
-    def handle_sh_ping(self, msg):
+    @dutil.route(dmsg.LSPingGS, DTBL)
+    def handle_ls_ping(self, msg):
         log = self._startup_logger
         gait = self.tag_inc  # 'get and inc tag'
 
-        log.info(f"Received SHPingGS from Local Services on node {msg.idx}")
+        log.info(f"Received LSPingGS from Local Services on node {msg.idx}")
 
         # Add the node into Global Services
-        self.add_node_from_SHPingGS(msg)
+        self.add_node_from_LSPingGS(msg)
 
-        self.sh_pings_recvd += 1
-        log.info(f"GS has received {self.sh_pings_recvd} of an expected {self.num_nodes} SHPingGS messages.")
+        self.ls_pings_recvd += 1
+        log.info(f"GS has received {self.ls_pings_recvd} of an expected {self.num_nodes} LSPingGS messages.")
 
-        if self.sh_pings_recvd == self.num_nodes:
-            # And done receiving SHPingGS's
-            log.info("received SHPingGS from all ls - m11")
-            self.bela_input.send(dmsg.GSIsUp(tag=gait()).serialize())
+        if self.ls_pings_recvd == self.num_nodes:
+            # And done receiving LSPingGS's
+            log.info("received LSPingGS from all ls - m11")
+            self.bela_input.put(dmsg.GSIsUp(tag=gait()))
             log.info("gs signaled to la_be it is up (GSIsUP) - m12.1")
             self._state = self.RunState.WAITING_FOR_HEAD
             # Set up global PolicyEvaluator here
@@ -765,7 +763,7 @@ class GlobalContext(object):
         # The RunState is set to HAS_HEAD in this function as well.
         ProcessContext.construct(self, msg, reply_channel)
 
-    @dutil.route(dmsg.SHProcessCreateResponse, DTBL)
+    @dutil.route(dmsg.LSProcessCreateResponse, DTBL)
     def handle_process_create_response(self, msg):
         log = self._process_logger
         log.debug(f"process create response tag {msg.tag} ref {msg.ref}")
@@ -790,7 +788,7 @@ class GlobalContext(object):
             plist=list(self.process_table.keys()),
         )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSProcessQuery, DTBL)
@@ -811,7 +809,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSProcessQueryResponse.Errors.SUCCESS, desc=pdesc
             )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSProcessKill, DTBL)
@@ -821,8 +819,8 @@ class GlobalContext(object):
         reply_channel = self.get_reply_handle(msg)
         ProcessContext.kill(self, msg, reply_channel)
 
-    @dutil.route(dmsg.SHMultiProcessKillResponse, DTBL)
-    def handle_sh_multi_process_kill_response(self, msg):
+    @dutil.route(dmsg.LSMultiProcessKillResponse, DTBL)
+    def handle_ls_multi_process_kill_response(self, msg):
         log = self._node_logger
         log.debug("handling %s", msg)
 
@@ -830,7 +828,7 @@ class GlobalContext(object):
             log.info("proc_kill_response=%s", str(proc_kill_response))
             self.handle_process_kill_response(proc_kill_response)
 
-    @dutil.route(dmsg.SHProcessKillResponse, DTBL)
+    @dutil.route(dmsg.LSProcessKillResponse, DTBL)
     def handle_process_kill_response(self, msg):
         log = self._process_logger
         log.debug(f"handling {msg!s}")
@@ -849,18 +847,18 @@ class GlobalContext(object):
 
         if not found:
             rm = gspjr(tag=self.tag_inc(), ref=msg.tag, err=gspjr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_channel.put(rm)
             log.debug(f"unknown: response to {msg}: {rm}")
         elif target_uid == msg.p_uid:
             rm = gspjr(tag=self.tag_inc(), ref=msg.tag, err=gspjr.Errors.SELF, err_info="self-join forbidden")
-            reply_channel.send(rm.serialize())
+            reply_channel.put(rm)
             log.debug(f"self join not allowed: {msg}")
         else:
             pctx = self.process_table[target_uid]
             pdesc = pctx.descriptor
             if process_desc.ProcessDescriptor.State.DEAD == pdesc.state:
                 rm = gspjr(tag=self.tag_inc(), ref=msg.tag, err=gspjr.Errors.SUCCESS, exit_code=pdesc.ecode)
-                reply_channel.send(rm.serialize())
+                reply_channel.put(rm)
                 log.debug(f"process dead, response to {msg}: {rm}")
             else:
                 if msg.timeout < 0:
@@ -870,7 +868,7 @@ class GlobalContext(object):
 
                 if timeout is not None and timeout <= 0.000100:  # 100 microseconds from now, is now.
                     rm = gspjr(tag=self.tag_inc(), ref=msg.tag, err=gspjr.Errors.TIMEOUT)
-                    reply_channel.send(rm.serialize())
+                    reply_channel.put(rm)
                 else:
                     self.pending_join.put(target_uid, msg, timeout=timeout)
                     log.debug(f"join stored for {target_uid}: {msg} timeout {timeout}")
@@ -951,11 +949,11 @@ class GlobalContext(object):
             # log.debug('join stored for target_uid: %s timeout %s', pending_puid, timeout)
         else:
             rm = gspjlr(tag=self.tag_inc(), ref=msg.tag, puid_status=self.puid_join_list_status[join_key])
-            reply_channel.send(rm.serialize())
+            reply_channel.put(rm)
             log.debug("send join list response")
             del self.puid_join_list_status[join_key]
 
-    @dutil.route(dmsg.SHProcessExit, DTBL)
+    @dutil.route(dmsg.LSProcessExit, DTBL)
     def handle_process_exit(self, msg):
         log = self._process_logger
         log.info(f"rec {msg}")
@@ -985,7 +983,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=0,
-                c_uid=ctx.stdin_context.shchannelcreate_msg.c_uid,
+                c_uid=ctx.stdin_context.lschannelcreate_msg.c_uid,
                 dec_ref=True,
             )
             ChannelContext.destroy(self, clean_chan, dutil.AbsorbingChannel())
@@ -995,7 +993,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=0,
-                c_uid=ctx.stdout_context.shchannelcreate_msg.c_uid,
+                c_uid=ctx.stdout_context.lschannelcreate_msg.c_uid,
                 dec_ref=True,
             )
             ChannelContext.destroy(self, clean_chan, dutil.AbsorbingChannel())
@@ -1005,7 +1003,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=0,
-                c_uid=ctx.stderr_context.shchannelcreate_msg.c_uid,
+                c_uid=ctx.stderr_context.lschannelcreate_msg.c_uid,
                 dec_ref=True,
             )
             ChannelContext.destroy(self, clean_chan, dutil.AbsorbingChannel())
@@ -1020,7 +1018,7 @@ class GlobalContext(object):
                 rm = gspjr(
                     tag=self.tag_inc(), ref=join_req.tag, err=gspjr.Errors.SUCCESS, exit_code=ctx.descriptor.ecode
                 )
-                reply_channel.send(rm.serialize())
+                reply_channel.put(rm)
                 # TODO AICI-1422 Implement verbose logging options
                 # log.debug('join response to %s: %s', join_req, rm)
             self.pending_join.remove(msg.p_uid)
@@ -1046,7 +1044,7 @@ class GlobalContext(object):
                         rm = gspjlr(
                             tag=self.tag_inc(), ref=join_req.tag, puid_status=self.puid_join_list_status[join_key]
                         )
-                        reply_channel.send(rm.serialize())
+                        reply_channel.put(rm)
                         # TODO AICI-1422 Implement verbose logging options
                         # log.debug('join response to %s: %s', join_req, rm)
 
@@ -1080,7 +1078,7 @@ class GlobalContext(object):
 
         if msg.p_uid in self.head_puid:
             log.info(f"head process id {msg.p_uid} exited")
-            self.bela_input.send(dmsg.GSHeadExit(tag=self.tag_inc(), exit_code=msg.exit_code).serialize())
+            self.bela_input.put(dmsg.GSHeadExit(tag=self.tag_inc(), exit_code=msg.exit_code))
             # TODO: head process exit cleanup
             self.head_puid.remove(msg.p_uid)
             if not self.head_puid:
@@ -1111,7 +1109,7 @@ class GlobalContext(object):
         if issued:
             self.pending[tag] = context.complete_construction
 
-    @dutil.route(dmsg.SHPoolCreateResponse, DTBL)
+    @dutil.route(dmsg.LSPoolCreateResponse, DTBL)
     def handle_pool_create_response(self, msg):
         log = self._pool_logger
         log.debug(f"create response tag {msg.tag} ref {msg.ref} received")
@@ -1133,7 +1131,7 @@ class GlobalContext(object):
             mlist=list(self.pool_table.keys()),
         )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSPoolQuery, DTBL)
@@ -1154,7 +1152,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSPoolQueryResponse.Errors.SUCCESS, desc=pdesc
             )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
 
         log.debug(f"response to {str(msg)}: {str(rm)}")
 
@@ -1165,7 +1163,7 @@ class GlobalContext(object):
         reply_channel = self.get_reply_handle(msg)
         PoolContext.destroy(self, msg, reply_channel)
 
-    @dutil.route(dmsg.SHPoolDestroyResponse, DTBL)
+    @dutil.route(dmsg.LSPoolDestroyResponse, DTBL)
     def handle_pool_destroy_response(self, msg):
         log = self._pool_logger
         log.debug(f"handling {msg}")
@@ -1182,7 +1180,7 @@ class GlobalContext(object):
         if issued:
             self.pending[tag] = context.complete_construction
 
-    @dutil.route(dmsg.SHChannelCreateResponse, DTBL)
+    @dutil.route(dmsg.LSChannelCreateResponse, DTBL)
     def handle_channel_create_response(self, msg):
         log = self._channel_logger
         log.debug(f"create response tag {msg.tag} ref {msg.ref} received")
@@ -1202,7 +1200,7 @@ class GlobalContext(object):
 
         ChannelContext.destroy(self, msg, reply_channel)
 
-    @dutil.route(dmsg.SHChannelDestroyResponse, DTBL)
+    @dutil.route(dmsg.LSChannelDestroyResponse, DTBL)
     def handle_channel_destroy_response(self, msg):
         log = self._channel_logger
         log.debug(f"handling {msg}")
@@ -1224,7 +1222,7 @@ class GlobalContext(object):
             clist=list(self.channel_table.keys()),
         )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {str(msg)}: {str(rm)}")
 
     @dutil.route(dmsg.GSChannelQuery, DTBL)
@@ -1256,7 +1254,7 @@ class GlobalContext(object):
             # TODO AICI-1422 Implement verbose logging options
             # log.debug('found descriptor: %s', cdesc)
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         # TODO AICI-1422 Implement verbose logging options
         # log.debug('response to %s: %s', msg, rm)
 
@@ -1275,7 +1273,7 @@ class GlobalContext(object):
                 rm = dmsg.GSChannelJoinResponse(
                     tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSChannelJoinResponse.Errors.SUCCESS, desc=cdesc
                 )
-                reply_channel.send(rm.serialize())
+                reply_channel.put(rm)
                 log.debug(f"response to {msg!s}: {rm!s}")
                 handled_immediately = True
             elif cdesc.State.DEAD == cdesc.state:
@@ -1283,7 +1281,7 @@ class GlobalContext(object):
                 rm = dmsg.GSChannelJoinResponse(
                     tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSChannelJoinResponse.Errors.DEAD, desc=cdesc
                 )
-                reply_channel.send(rm.serialize())
+                reply_channel.put(rm)
                 log.debug(f"response to {msg!s}: {rm!s}")
                 handled_immediately = True
             else:  # close case
@@ -1327,7 +1325,7 @@ class GlobalContext(object):
             hlist=list(self.node_table.keys()),
         )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSNodeQueryTotalCPUCount, DTBL)
@@ -1349,7 +1347,7 @@ class GlobalContext(object):
             total_cpus=total_cpus,
         )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSNodeQuery, DTBL)
@@ -1375,11 +1373,11 @@ class GlobalContext(object):
             )
             log.debug(f"found descriptor={sdesc}")
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
-    @dutil.route(dmsg.SHMultiProcessCreateResponse, DTBL)
-    def handle_sh_group_create_response(self, msg):
+    @dutil.route(dmsg.LSMultiProcessCreateResponse, DTBL)
+    def handle_ls_group_create_response(self, msg):
         log = self._node_logger
         log.debug("handling %s", msg)
 
@@ -1407,7 +1405,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSNodeQueryAllResponse.Errors.SUCCESS, descriptors=descriptors
             )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSGroupCreate, DTBL)
@@ -1509,7 +1507,7 @@ class GlobalContext(object):
             glist=list(self.group_table.keys()),
         )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSGroupQuery, DTBL)
@@ -1530,7 +1528,7 @@ class GlobalContext(object):
                 tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSGroupQueryResponse.Errors.SUCCESS, desc=gdesc
             )
 
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
     @dutil.route(dmsg.GSRebootRuntime, DTBL)
@@ -1543,14 +1541,14 @@ class GlobalContext(object):
 
         # Send RebootRuntime to the frontend
         drr = dmsg.RebootRuntime(tag=self.tag_inc(), h_uid=msg.h_uid)
-        self.bela_input.send(drr.serialize())
+        self.bela_input.put(drr)
         log.debug(f"response to {msg!s}: {drr!s}")
 
         # Send response
         rm = dmsg.GSRebootRuntimeResponse(
             tag=self.tag_inc(), ref=msg.tag, err=dmsg.GSRebootRuntimeResponse.Errors.SUCCESS
         )
-        reply_channel.send(rm.serialize())
+        reply_channel.put(rm)
         log.debug(f"response to {msg!s}: {rm!s}")
 
 
@@ -1574,13 +1572,8 @@ def single():
         channel_init = pickle.loads(channel_init_bytes)
 
         for initvals in channel_init:
-            cuid, spoold, schand, rdng = initvals
-            log.debug(f"attaching to test channel: cuid {cuid} reading {rdng}")
-            chan = dch.Channel.attach(schand)
-            if rdng:
-                the_test_conns[cuid] = dconn.Connection(inbound_initializer=chan, policy=dparm.POLICY_INFRASTRUCTURE)
-            else:
-                the_test_conns[cuid] = dconn.Connection(outbound_initializer=chan, options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23), policy=dparm.POLICY_INFRASTRUCTURE)
+            cuid, q_sdesc = initvals
+            the_test_conns[cuid] = InfraQueue.attach(q_sdesc)
 
     else:
         log.debug("no test channels here!")
@@ -1625,7 +1618,7 @@ def single_thread(gs_stdout):
         log.info("normal exit")
     except Exception as e:
         log.exception("fatal error")
-        gs_stdout.send(dmsg.AbnormalTermination(tag=0, err_info="fatal exception").serialize())
+        gs_stdout.put(dmsg.AbnormalTermination(tag=0, err_info="fatal exception"))
         time.sleep(1)
         raise e
 
@@ -1657,13 +1650,8 @@ def multi():
         channel_init = pickle.loads(channel_init_bytes)
 
         for initvals in channel_init:
-            cuid, spoold, schand, rdng = initvals
-            log.debug(f"attaching to test channel: cuid {cuid} reading {rdng}")
-            chan = dch.Channel.attach(schand)
-            if rdng:
-                the_test_conns[cuid] = dconn.Connection(inbound_initializer=chan, policy=dparm.POLICY_INFRASTRUCTURE)
-            else:
-                the_test_conns[cuid] = dconn.Connection(outbound_initializer=chan, options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23), policy=dparm.POLICY_INFRASTRUCTURE)
+            cuid, q_sdesc = initvals
+            the_test_conns[cuid] = InfraQueue.attach(q_sdesc)
     else:
         log.debug("no test channels here!")
 

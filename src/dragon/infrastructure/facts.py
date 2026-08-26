@@ -55,11 +55,11 @@ env_vars = frozenset(
         "INDEX",
         DEFAULT_PD_VAR,
         INF_PD_VAR,
-        "LOCAL_SHEP_CD",
+        "LOCAL_LS_QD",
         "LOCAL_BE_CD",
-        "GS_RET_CD",
-        "SHEP_RET_CD",
-        "GS_CD",
+        "GS_RET_QD",
+        "LS_RET_QD",
+        "GS_QD",
         "DEFAULT_SEG_SZ",
         "INF_SEG_SZ",
         "TEST",
@@ -206,11 +206,11 @@ BASE_BE_LOCAL_CUID = 2**61
 #: communicate with its transport agent
 RANGE_BE_LOCAL_CUID = 2**61
 
-#: Starting value of the local services shepherd channel unique ID (cuid)
-SHEP_CUID_POW = 62
-BASE_SHEP_CUID = 2**SHEP_CUID_POW
+#: Starting value of the local services channel unique ID (cuid)
+LS_CUID_POW = 62
+BASE_LS_CUID = 2**LS_CUID_POW
 #: Range for the local services channel ID's (cuid)
-RANGE_SHEP_CUID = 2**SHEP_CUID_POW
+RANGE_LS_CUID = 2**LS_CUID_POW
 
 #: Starting value of the User created channel ID (cuid)
 FIRST_CUID = 2**63
@@ -324,7 +324,7 @@ def transport_cuid_from_index(index: int) -> int:
     return BASE_TA_CUID + index
 
 
-def shepherd_cuid_from_index(index: int) -> int:
+def localservices_cuid_from_index(index: int) -> int:
     """Get the unique Channel ID of local services from the node index.
 
     :param index: Local node index
@@ -334,8 +334,8 @@ def shepherd_cuid_from_index(index: int) -> int:
     """
 
     assert index >= 0
-    assert index < RANGE_SHEP_CUID
-    return BASE_SHEP_CUID + index
+    assert index < RANGE_LS_CUID
+    return BASE_LS_CUID + index
 
 
 def gw_cuid_from_index(index: int, num_gw_channels: int) -> int:
@@ -532,17 +532,17 @@ def is_pre_defined_pool(m_uid: int) -> bool:
     return m_uid < FIRST_MUID
 
 
-def index_from_shepherd_cuid(cuid: int) -> int:
+def index_from_localservices_cuid(cuid: int) -> int:
     """Retun the local node index from the `c_uid` of local services.
 
-    :param cuid: unique channel id of the local Shepherd
+    :param cuid: unique channel id of the local services
     :type cuid: int
     :return: Unique local node index.
     :rtype: int
     """
-    assert cuid >= BASE_SHEP_CUID
-    assert cuid < BASE_SHEP_CUID + RANGE_SHEP_CUID
-    return cuid - BASE_SHEP_CUID
+    assert cuid >= BASE_LS_CUID
+    assert cuid < BASE_LS_CUID + RANGE_LS_CUID
+    return cuid - BASE_LS_CUID
 
 
 def is_default_pool(m_uid: int) -> bool:

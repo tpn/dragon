@@ -60,9 +60,9 @@ def start_overlay_network(
         + host_ids
         + [
             "--ch-in-sdesc",
-            str(ch_in_sdesc),
+            ch_in_sdesc,
             "--ch-out-sdesc",
-            str(ch_out_sdesc),
+            ch_out_sdesc,
             "--port",
             str(DEFAULT_OVERLAY_NETWORK_PORT),
             "--log-sdesc",

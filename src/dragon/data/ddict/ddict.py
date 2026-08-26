@@ -1969,7 +1969,7 @@ class DDict:
         if self._trace:
             log.log(logging.INFO, *args, **kw_args)
 
-    def _get_main_manager(self):  # SHGetKV
+    def _get_main_manager(self):  # LSGetKV
         try:
             serialized_main_manager = get_local_kv(key=self._serialized_orc)
             self._main_manager_connection = fli.FLInterface.attach(b64decode(serialized_main_manager))
@@ -3778,6 +3778,10 @@ class DDict:
         for resp_msg in msglist:
             if resp_msg.err != DragonError.SUCCESS:
                 raise DDictError(resp_msg.err, resp_msg.errInfo)
+
+    @property
+    def timeout(self):
+        return self._timeout
 
     @property
     def stats(self) -> list[DDictManagerStats]:

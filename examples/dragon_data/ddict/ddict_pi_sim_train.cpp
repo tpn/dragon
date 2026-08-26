@@ -61,7 +61,7 @@ void training(char* ddict_descr, int client_id, int num_procs, uint64_t digits, 
             double prev_avg = avg;
             SerializableInt key(-1);
             SerializableDouble result = child_dd[key];
-            avg = result.getVal();
+            avg = result.val();
 
             // stop the loop if the it has converged to a value that changes less than places
             // on each iteration.

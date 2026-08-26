@@ -148,11 +148,11 @@ cdef class FLISendH:
             recv_mem would only work for one read on the receive side and is currently
             not allowed since calling it after the first receive would not work.
 
-        :param turbo_mode: Default is False. This tells the FLI to return immediately
-            on sends with transfer of ownership. This means the sender might not be
-            informed of a send failure. Receivers should have timeouts on receives to
-            be guaranteed they will timeout should a failure occur. The sender
-            should likely not care when turbo mode is being used.
+        :param turbo_mode: Default is False for unbuffered sends. This tells the FLI
+            to return immediately on sends with transfer of ownership. Buffered sends
+            enable this automatically unless flush is used. The sender might not be
+            informed of a send failure, so receivers should have timeouts to guarantee
+            they return should a failure occur.
 
         :param flush: Default is False. This tells the FLI to insure that when the send
             handle is closed any writes to the stream/channel are deposited in the
@@ -213,7 +213,12 @@ cdef class FLISendH:
 
         attrs.dest_pool = dest_pool
         attrs.allow_strm_term = allow_strm_term
-        attrs.turbo_mode = turbo_mode
+        # Buffered sends transfer one complete message, so use local completion
+        # by default. flush remains the caller's opt-in remote-completion
+        # guarantee. On a streaming FLI, use_main_buffered makes the send
+        # handle collect its writes and send one message through the main Channel,
+        # so it receives the same local-completion behavior.
+        attrs.turbo_mode = turbo_mode or adapter._is_buffered or use_main_buffered
         attrs.flush = flush
         attrs.debug = debug
 
@@ -277,12 +282,16 @@ cdef class FLISendH:
         except:
             pass
 
-    def send_bytes(self, bytes data, uint64_t arg=0, bool buffer=False, timeout=None):
+    def send_bytes(self, const unsigned char[::1] data, uint64_t arg=0, bool buffer=False, timeout=None):
         """
         When sending bytes it is possible to specify the bytes to be sent. In addition,
         you may specify a user specified argument or hint to be sent. If buffer is true, then
         data is not actually sent on this call, but buffered for future call or until the send
         handle is closed.
+
+        data must expose a contiguous byte buffer. Keeping that buffer as a Cython
+        contiguous view lets the FLI use it directly and avoids an intermediate
+        bytes conversion before FLI performs its required ownership-safe copy.
 
         If the receiver closes the receive handle early, sending bytes may result in
         raising EOFError.
@@ -299,11 +308,10 @@ cdef class FLISendH:
 
         time_ptr = _computed_timeout(timeout, &timer)
 
-        cdef const unsigned char[:] c_data = data
         data_len = len(data)
 
         with nogil:
-            derr = dragon_fli_send_bytes(&self._sendh, data_len, <uint8_t *>&c_data[0], arg, buffer, time_ptr)
+            derr = dragon_fli_send_bytes(&self._sendh, data_len, <uint8_t *>&data[0], arg, buffer, time_ptr)
 
         if derr == DRAGON_EOT:
             raise DragonFLIEOT(derr, "Receiver Ended Streaming")
@@ -505,6 +513,9 @@ cdef class FLIRecvH:
         if derr == DRAGON_OBJECT_DESTROYED:
             raise DragonFLIObjectDestroyed(derr, "The receive handle could not be opened. Object destroyed.")
 
+        if derr == DRAGON_CHANNEL_EMPTY:
+            raise DragonFLIEOT(derr, "Could not open receive handle.")
+
         if derr != DRAGON_SUCCESS:
             raise DragonFLIError(derr, "Could not open receive handle stream")
 
@@ -628,7 +639,7 @@ cdef class FLIRecvH:
             raise DragonFLIObjectDestroyed(derr, "The data could not be received. Object destroyed.")
 
         if derr == DRAGON_EOT:
-            raise DragonFLIEOT(derr, "End of Transmission")
+            raise DragonFLIEOT(derr, "End of Text")
 
         if derr != DRAGON_SUCCESS:
             raise DragonFLIError(derr, "Could not receive into bytes buffer")
@@ -685,7 +696,7 @@ cdef class FLIRecvH:
         if derr == DRAGON_EOT:
             if num_bytes > 0:
                 free(c_data)
-            raise DragonFLIEOT(derr, "End of Transmission")
+            raise DragonFLIEOT(derr, "End of Text")
 
         if derr != DRAGON_SUCCESS:
             raise DragonFLIError(derr, "Error receiving FLI data")
@@ -736,7 +747,13 @@ cdef class FLIRecvH:
             raise DragonFLIObjectDestroyed(derr, "The data could not be received. Object destroyed.")
 
         if derr == DRAGON_EOT:
-            raise DragonFLIEOT(derr, "End of Transmission")
+            raise DragonFLIEOT(derr, "End of Text")
+
+        if derr == DRAGON_CHANNEL_EMPTY:
+            # The streaming PickleReadAdapter maps an empty nonblocking channel
+            # to DragonFLIEOT. Keep recv_mem consistent so Queue.get_nowait()
+            # translates both receive paths to queue.Empty.
+            raise DragonFLIEOT(derr, "FLI Empty")
 
         if derr == DRAGON_DYNHEAP_REQUESTED_SIZE_TOO_LARGE or derr == DRAGON_MEMORY_POOL_FULL:
             raise DragonFLIOutOfMemoryError(derr, "Could not receive message because out of memory in Dragon Memory Pool. Message was discarded.")
@@ -1030,6 +1047,28 @@ cdef class FLInterface:
         """
         return self._is_buffered
 
+    @property
+    def main_channel_cuid(self):
+        """
+        Returns the cuid of the main channel of this FLI adapter.
+
+        This value is consistent between an FLI that was created and one that
+        was attached from the same serialized descriptor.
+
+        :raises DragonFLIError: If the FLI has no main channel or the cuid
+            could not be retrieved.
+        """
+        cdef:
+            dragonError_t derr
+            dragonC_UID_t cuid
+
+        derr = dragon_fli_main_channel_cuid(&self._adapter, &cuid)
+
+        if derr != DRAGON_SUCCESS:
+            raise DragonFLIError(derr, "Could not retrieve the main channel cuid from this FLI")
+
+        return cuid
+
     def new_task(self, timeout=None):
         """
         Add a task to the task based FLI.
@@ -1081,6 +1120,47 @@ cdef class FLInterface:
         if derr != DRAGON_SUCCESS:
             raise DragonFLIError(derr, "Could not join on a task as done on this FLI.")
 
+    def poll(self, timeout=None):
+        """
+        Poll the main channel of the FLI adapter for available messages. Blocks
+        until a message is available or the timeout expires.
+
+        :param timeout: Default is None. None means to block forever. Otherwise
+            the timeout should be some number of seconds to wait. A value of 0
+            means try once without blocking.
+
+        :return: True if at least one message is available, False if no messages
+            are available (when using a non-blocking poll with timeout=0).
+
+        :raises DragonFLITimeoutError: if the timeout expires before a message arrives.
+        :raises DragonFLIObjectDestroyed: if the underlying object was destroyed.
+        :raises DragonFLIError: on any other error.
+        """
+        cdef:
+            dragonError_t derr
+            timespec_t timer
+            timespec_t* time_ptr
+
+        time_ptr = _computed_timeout(timeout, &timer)
+
+        with nogil:
+            derr = dragon_fli_poll(&self._adapter, time_ptr)
+
+        if derr == DRAGON_SUCCESS:
+            return True
+
+        if derr == DRAGON_EMPTY:
+            return False
+
+        if derr == DRAGON_TIMEOUT:
+            # not sure if this should raise or return false as it's probably empty?
+            raise DragonFLITimeoutError(derr, "Time out while polling FLI.")
+
+        if derr == DRAGON_OBJECT_DESTROYED:
+            raise DragonFLIObjectDestroyed(derr, "Could not poll FLI. Object destroyed.")
+
+        raise DragonFLIError(derr, "Could not poll the FLI.")
+
 
 cdef class PickleWriteAdapter:
 
@@ -1105,12 +1185,9 @@ cdef class PickleWriteAdapter:
         else:
             sbuf = b
 
-        if isinstance(sbuf, memoryview):
-            sbuf = sbuf.tobytes()
-
-        if isinstance(sbuf, bytearray):
-            sbuf = bytes(sbuf)
-
+        # send_bytes accepts contiguous bytes-like input directly. Avoiding
+        # bytearray/memoryview.tobytes() removes a full sender-side copy. The
+        # FLI still copies buffered fragments when it owns their lifetime.
         length = len(sbuf)
 
         if self._sendh._is_open == False:
@@ -1189,7 +1266,7 @@ cdef class PickleReadAdapter:
                 raise DragonFLIObjectDestroyed(derr, "The data could not be received. Object destroyed.")
 
             if derr == DRAGON_EOT:
-                raise DragonFLIEOT(derr, "End of Transmission")
+                raise DragonFLIEOT(derr, "End of Text")
 
             if derr == DRAGON_CHANNEL_EMPTY:
                 raise DragonFLIEOT(derr, "FLI Empty")

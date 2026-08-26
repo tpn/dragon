@@ -64,37 +64,41 @@ class SSHHost(RemoteHost):
         self.stderr: Optional[paramiko.ChannelFile] = None
 
     def connect(self):
+        # 1. Initialize the SSH Client
         self.ssh_client = paramiko.SSHClient()
 
-        host_config = {}
-        if self.ssh_config_path:
-            config_path = os.path.expanduser(self.ssh_config_path)
-            if os.path.exists(config_path):
-                with open(config_path, "r") as f:
-                    config = paramiko.SSHConfig()
-                    config.parse(f)
-                    host_config = config.lookup(self.hostname)
+        # 2. Automatically add unknown host keys (use AutoAddPolicy with caution in production)
+        self.ssh_client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
 
-        connect_params = {
+        # 3. Initialize and parse the custom SSH config file
+        host_config = {}
+        config_path = os.path.expanduser(self.ssh_config_path) if self.ssh_config_path else os.path.expanduser("~/.ssh/config")
+        if os.path.exists(config_path):
+            with open(config_path, "r") as f:
+                config = paramiko.SSHConfig()
+                config.parse(f)
+                host_config = config.lookup(self.hostname)
+
+        # 4. Map SSH config keys to client.connect parameters
+        connect_kwargs = {
             "hostname": host_config.get("hostname", self.hostname),
             "port": int(host_config.get("port", 22)),
         }
 
         if "user" in host_config:
-            connect_params["username"] = host_config.get("user")
+            connect_kwargs["username"] = host_config.get("user")
 
         if self.private_key:
-            connect_params["key_filename"] = self.private_key
+            connect_kwargs["key_filename"] = self.private_key
         elif "identityfile" in host_config:
             key_filename = os.path.expanduser(host_config["identityfile"][0])
-            connect_params["key_filename"] = key_filename
+            connect_kwargs["key_filename"] = key_filename
 
         if self.passphrase:
-            connect_params["passphrase"] = self.passphrase
+            connect_kwargs["passphrase"] = self.passphrase
 
-        self.policy = paramiko.AutoAddPolicy()  # Security risk
-        self.ssh_client.set_missing_host_key_policy(self.policy)
-        self.ssh_client.connect(**connect_params)
+        # 7. Connect using the extracted configurations
+        self.ssh_client.connect(**connect_kwargs)
         return True
 
     def execute_command(self, command):

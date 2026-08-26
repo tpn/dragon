@@ -197,7 +197,13 @@ static dragonError_t _send_mem(dragonChannelSendh_t* sendh, dragonMemoryDescr_t*
     msg_attrs.no_copy_read_only = no_copy_read_only;
 
     if (transfer_ownership && turbo_mode) {
-        /* We don't need to wait for confirmation */
+        /*
+         * Ownership has moved into Dragon memory, so the caller no longer
+         * needs the payload to remain valid. Return after the local channel
+         * accepts the request instead of waiting for remote completion. This
+         * lets consecutive buffered queue puts saturate the link. The flush
+         * path below remains the opt-in remote-completion guarantee.
+         */
         err = dragon_chsend_get_attr(sendh, &send_attrs);
         if (err != DRAGON_SUCCESS)
             append_err_return(err, "Could not get send handle attributes.");
@@ -212,9 +218,11 @@ static dragonError_t _send_mem(dragonChannelSendh_t* sendh, dragonMemoryDescr_t*
     }
 
     if (flush) {
-        /* We wait until it is deposited. We don't need to keep the original
-           return mode here because the stream/send handle is being closed and
-           flush is only set to true on the final send on the send handle. */
+        /*
+         * Flush is used when the user wishes to know that the data has been written into
+         * the channel and once this call is completed, the data is definitely available in
+         * the channel. For remote sends, this translates to a return_when_deposited return mode.
+         */
         err = dragon_chsend_get_attr(sendh, &send_attrs);
         if (err != DRAGON_SUCCESS)
             append_err_return(err, "Could not get send handle attributes.");
@@ -260,11 +268,9 @@ static dragonError_t _send_mem(dragonChannelSendh_t* sendh, dragonMemoryDescr_t*
         dest = NULL;
     }
 
-    /* Do not call this at all since the message structure is on the stack to
-       avoid an unnecessary malloc. */
-    // err = dragon_channel_message_destroy(&msg, false);
-    // if (err != DRAGON_SUCCESS)
-    //     append_err_return(err, "Could not destroy the message.");
+    err = dragon_channel_message_destroy(&msg, false);
+    if (err != DRAGON_SUCCESS)
+        append_err_return(err, "Could not destroy the message.");
 
     err = dragon_channel_message_attr_destroy(&msg_attrs);
     if (err != DRAGON_SUCCESS)
@@ -536,11 +542,9 @@ static dragonError_t _recv_mem(dragonChannelRecvh_t* recvh, dragonMemoryDescr_t*
         dest = NULL;
     }
 
-    /* Do not call message destroy since the message structures are on the
-       stack to avoid an unnecessary malloc. */
-    // err = dragon_channel_message_destroy(&msg, false);
-    // if (err != DRAGON_SUCCESS)
-    //     append_err_return(err, "Could not destroy message structure.");
+    err = dragon_channel_message_destroy(&msg, false);
+    if (err != DRAGON_SUCCESS)
+        append_err_return(err, "Could not destroy message structure.");
 
     no_err_return(DRAGON_SUCCESS);
 }
@@ -1236,10 +1240,43 @@ dragonError_t _fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, size_t nu
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not resolve send handle to internal fli send handle object");
 
+    /* If this is a buffered send then all calls to send_bytes must be buffered and one
+       channel message will be sent. There are two ways we can have a buffered send:
+
+       a) when the FLI is created, it may be specified to use the buffered protocol. In
+          this case there is only a main channel and no manager channel and no FLI supplied
+          stream channels. All sends then are buffered into one actual message passing through
+          the main channel so a receiver gets all its data from one channel message - though
+          the receiver may break this up into as many FLI receives as it wants based on the
+          size of the channel message. In the case of a buffered FLI, one channel message is
+          necessary so that multiple senders and multiple receivers can use the FLI at the same
+          time without the possibility of getting garbled messages.
+       b) When a send handle is opened, it can be declared to be buffered. In this case, there
+          is a main channel along with possible manager channel and/or stream channels, but the
+          sender has chosen not to use a separate stream channel and instead wants to buffer all
+          the sends into one channel message that will be sent to the FLI main channel directly
+          once the user does a send without buffering specified. The close_required flag then
+          gets set (see below) once buffering is not specified. The close of the send handle then
+          collects all the buffered sends and sends them all at once in one channel message to the
+          main FLI channel.
+
+       In addition, there is one other path, called the fast path, for sending one shared memory
+       allocation through the FLI. This fast path occurs when a user does one and only one send of
+       shared memory through a buffered FLI or buffered send handle. In that case no buffering of
+       sends is done (shared memory is never itself buffered because that would cause the code to
+       need to copy the shared memory allocation and for the sake of performance shared memory
+       allocations are not copied out of shared memory and then back into shared memory - which is
+       what buffering shared memory would result in). When exactly one shared memory allocation is
+       sent on a buffered FLI or buffered send handle, then close_required is set to true immediately
+       to signal the FLI that only one send of memory may occur on a buffered FLI or buffered send
+       handle for this fast path. */
     if (sendh_obj->close_required)
         err_return(DRAGON_INVALID_ARGUMENT, "When using a Buffered FLI, the buffer argument must be true unless send_bytes is called exactly once before closing the send handle.");
 
-    /* buffering bytes to send */
+    /* Once a send is done on a buffered FLI or buffered send handle and buffer was not
+       specified, then the message will be sent after this data has been buffered. In this
+       case, the data will be sent on the close of the send handle which is then required
+       next by setting the close_required flag. */
     if (sendh_obj->buffered_send && !buffer) {
         sendh_obj->close_required = true;
     }
@@ -1270,9 +1307,11 @@ dragonError_t _fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, size_t nu
             append_err_return(err, "Could not send data.");
     }
 
-    err = _send_stream_channel_when_primed(sendh_obj, false, deadline);
-    if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not deposit the stream channel for some reason.");
+    if (!sendh_obj->buffered_send) {
+        err = _send_stream_channel_when_primed(sendh_obj, false, deadline);
+        if (err != DRAGON_SUCCESS)
+            append_err_return(err, "Could not deposit the stream channel for some reason.");
+    }
 
     no_err_return(DRAGON_SUCCESS);
 }
@@ -1281,7 +1320,8 @@ dragonError_t _fli_send_bytes(dragonFLISendHandleDescr_t* send_handle, size_t nu
 /* Beginning of user API                                                                */
 /****************************************************************************************/
 
-/** @defgroup fli_lifecycle Channels Lifecycle Functions
+/** @defgroup fli_lifecycle
+ *  Channels Lifecycle Functions
  *  @{
  */
 
@@ -2331,6 +2371,28 @@ dragon_fli_open_send_handle(const dragonFLIDescr_t* adapter, dragonFLISendHandle
         append_err_return(err, "Could not resolve adapter to internal fli object");
 
     buffered_send = (strm_ch == STREAM_CHANNEL_IS_MAIN_FOR_BUFFERED_SEND) || obj->use_buffered_protocol;
+    /* Turbo mode means that when a send is done, the send will return immediately and not wait
+       for confirmation that it is buffered or deposited or received. Without waiting for one of
+       these confirmations there is no way for the code to know if the transport has copied the
+       data into its own buffers prior to this process possibly freeing the shared memory or re-using
+       it. In general turbo mode cannot be used in these cases.
+
+       However, turbo mode can be valid when transfer of ownership of the managed memory allocation
+       is also required/requested. There are a couple of cases where this can occur.
+
+       a.) When an FLI is buffered, a user may send as many bytes as they like as long as they specify
+           they are to be buffered. In this case the FLI will own all the data to be sent and it will be
+           copied into one shared memory allocation which may then be sent in turbo mode without waiting
+           for confirmation of the data being deposited or received. In this case the data is sent with
+           transfer of ownership and turbo mode.
+       b.) One other case is the fast path, which allows the user to send one managed memory allocation
+           over a buffered FLI. In this case turbo mode would only be valid if transfer of ownership is
+           also specified for that managed memory allocation.
+
+       In either of these two cases, transfer of ownership is checked right before sending the managed
+       memory allocation. Without transfer of ownership of the shared memory allocation AND turbo mode
+       being set to true, turbo mode will not be used to prevent the possibility of garbled data. */
+    turbo_mode = turbo_mode || buffered_send;
 
     if (buffered_send && strm_ch != NULL && strm_ch != STREAM_CHANNEL_IS_MAIN_FOR_BUFFERED_SEND)
         err_return(DRAGON_INVALID_ARGUMENT, "You cannot supply a stream channel while using the buffered protocol or a buffered send operation.");
@@ -2787,7 +2849,7 @@ dragonError_t dragon_fli_open_recv_handle(const dragonFLIDescr_t* adapter, drago
  *
  * All receive operations between an open and a close operation are guaranteed to be received
  * in order by a receiving process. A recv handle should be closed once the sender has
- * completed sending data. End of transmission will be indicated by a return code on a recv
+ * completed sending data. End of text will be indicated by a return code on a recv
  * operation.
  *
  * @param recv_handle is the open receive handle to be closed.
@@ -3326,13 +3388,35 @@ dragonError_t dragon_fli_send_mem(dragonFLISendHandleDescr_t* send_handle, drago
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not resolve send handle to internal fli send handle object");
 
-    if (sendh_obj->buffered_send)
-        err_return(DRAGON_INVALID_ARGUMENT, "You cannot use dragon_fli_send_mem on a buffered fli adapter or send handle. Use dragon_fli_send_bytes instead.");
+    if (sendh_obj->buffered_send) {
+        if (sendh_obj->close_required || sendh_obj->buffered_allocations != NULL)
+            err_return(DRAGON_INVALID_OPERATION, "A buffered FLI send handle cannot mix a managed-memory send with buffered writes.\n"
+                                                 "There can also be one and only one managed-memory send for a buffered send handle.\n"
+                                                 "One of these two rules was violated.");
 
-    /* First send any buffered bytes that have not been sent. If there are none, it will just return. */
-    err = _send_buffered_bytes(sendh_obj, false, deadline);
-    if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Failed to send buffered bytes before sending memory.");
+        /* When a user has a managed memory allocation to send on a buffered FLI or buffered
+          send handle, then this fast path will allow one and only one send of managed memory
+          to be sent. The close_required flag is set to true to indicate that the one send has
+          been done and no more sends can occur on this buffered FLI on this send handle. This
+          is a fast path because copies necessarily created by buffering bytes can be avoided
+          and the already allocated shared memory can be sent as-is.
+
+          When an FLI or FLI send handle is buffered, all data the user writes will be sent in
+          one managed memory allocation so it can be received as one managed memory allocation
+          by the FLI receiver code (though the user of the FLI may specify multiple reads of bytes,
+          effectively using a bit at a time of the single channel message data). Since we don't
+          buffer managed memory sends (to avoid making copies of them), a single managed memory
+          send operation cannot be combined with other send operations on a buffered FLI.
+
+          If the send of this managed memory also specifies transfer of ownership, then turbo mode
+          can safely be applied to make this fast path even faster. */
+        sendh_obj->close_required = true;
+    } else {
+        /* First send any buffered bytes that have not been sent. If there are none, it will just return. */
+        err = _send_buffered_bytes(sendh_obj, false, deadline);
+        if (err != DRAGON_SUCCESS)
+            append_err_return(err, "Failed to send buffered bytes before sending memory.");
+    }
 
     /* Check that for a streaming connection the receiver has not closed the receive handle. If
        it has, then exit with appropriate return code. */
@@ -3352,7 +3436,7 @@ dragonError_t dragon_fli_send_mem(dragonFLISendHandleDescr_t* send_handle, drago
 
     /* sending mem on stream channel */
 
-    err = _send_mem(&sendh_obj->chan_sendh, mem, arg, transfer_ownership, no_copy_read_only, sendh_obj->turbo_mode, false, dest_pool, deadline, sendh_obj->debug);
+    err = _send_mem(&sendh_obj->chan_sendh, mem, arg, transfer_ownership, no_copy_read_only, sendh_obj->turbo_mode, sendh_obj->flush, dest_pool, deadline, sendh_obj->debug);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not send the managed memory down the stream channel.");
 
@@ -3736,4 +3820,36 @@ dragonError_t dragon_fli_num_msgs(const dragonFLIDescr_t* adapter, size_t* num_m
     no_err_return(DRAGON_SUCCESS);
 }
 
-/** @} */ // end of fli_sendrecv group.
+/**
+ * @brief Get the cuid of the main channel from the FLI adapter.
+ *
+ * @param adapter is a descriptor and opaque handle to the FLI adapter.
+ *
+ * @param cuid is a pointer that will hold the cuid of the main channel on
+ * success.
+ *
+ * @return DRAGON_SUCCESS or a return code to indicate what problem occurred.
+ */
+dragonError_t dragon_fli_main_channel_cuid(const dragonFLIDescr_t* adapter, dragonC_UID_t* cuid) {
+    dragonError_t err;
+    dragonFLI_t* obj;
+
+    if (adapter == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "Invalid fli adapter descriptor");
+
+    if (cuid == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "Invalid cuid pointer");
+
+    err = _fli_from_descr(adapter, &obj);
+    if (err != DRAGON_SUCCESS)
+        append_err_return(err, "Could not resolve adapter to internal fli object");
+
+    if (!obj->has_main_ch)
+        err_return(DRAGON_INVALID_ARGUMENT, "This FLI does not have a main channel.");
+
+    *cuid = obj->main_ch._idx;
+
+    no_err_return(DRAGON_SUCCESS);
+}
+
+/** @} */

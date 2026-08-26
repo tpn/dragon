@@ -21,6 +21,7 @@ from native.test_ddict_c_driver import TestDDictC
 from native.test_ddict_cpp_driver import TestDDictCPP
 from native.test_barrier_cpp_driver import TestBarrierCPP
 from native.test_semaphore_cpp_driver import TestSemaphoreCPP
+from native.test_serializables_driver import TestSerializables
 from native.test_queue_cpp_driver import TestQueueCPP
 
 if __name__ == "__main__":

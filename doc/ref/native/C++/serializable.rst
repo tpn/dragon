@@ -30,3 +30,18 @@ writing your own subclasses of SerializableBase or any of the other classes.
 
 .. doxygenclass:: dragon::Serializable2DMatrix
    :members:
+
+.. doxygenclass:: dragon::SerializableNDArray
+   :members:
+
+.. doxygenclass:: dragon::SerializableBarrier
+   :members:
+
+.. doxgenclass:: dragon::SerializableDDict
+   ::members:
+
+.. doxygenclass:: dragon::SerializableQueue
+   :members:
+
+.. doxygenclass:: dragon::SerializableSemaphore
+   :members:

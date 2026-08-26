@@ -1,3 +1,30 @@
+# Dragon 0.14.2 Release Summary
+
+Version 0.14.2 brings performance and stability improvements, solidifies support for ARM architectures, adds multi-node support to our devcontainers, and as always fixes some bugs
+
+## Changed
+- Swapped in native queue implementation throughout runtime for improved performance and stability
+- Improved bandwidth for queue put operations
+- Expanded Serializable support for seamless interprocess communication between Python and C++
+- ARM aarch64 builds now automatically built for all supported Python versions in pipeline
+- Dropped support for Python 3.10
+
+## Added
+- LangGraph integrations and examples for deploying agents via Dragon and LangGraph
+- Full multi-node support in Docker Compose environments with enhanced dev container
+- Automated unit tests now incorporate AI tests for improved test coverage
+- Integrated Sonarqube initial quality gates
+- New dependency tag for `services` in extra-requirements
+
+## Fixed
+- Fixed memory errors in frontend memory pools
+- Resolved launcher issues preventing multi-node execution in Docker Compose environments
+- Fixed dragon-cleanup not properly terminating child processes in single-node setups
+- Addressed memory leak occurring during GUPS batchput operations
+- Fixed "Unsupported workload manager specified" error in multi-node launcher
+- Automatically generate SSH keys for multi-node devcontainer
+- Updated Dragon documentation to highlight HSTA configuration
+
 # Dragon 0.14.1 Release Summary
 
 We're excited to announce the release of Dragon v0.14.1, which includes several updates, additions and fixes. Here are the highlights:

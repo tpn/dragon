@@ -15,11 +15,11 @@ typedef dragonError_t (*deserializeFun)(MessageDef::Reader& reader, DragonMsg** 
 namespace dragon {
 
 
-class SHCreateProcessLocalChannelMsg: public DragonMsg {
+class LSCreateProcessLocalChannelMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_CREATE_PROCESS_LOCAL_CHANNEL;
+    static const MessageType TC = LS_CREATE_PROCESS_LOCAL_CHANNEL;
 
-    SHCreateProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t muid, uint64_t blockSize, uint64_t capacity, const char* respFLI);
+    LSCreateProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t muid, uint64_t blockSize, uint64_t capacity, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* respFLI();
     const uint64_t puid();
@@ -38,11 +38,11 @@ class SHCreateProcessLocalChannelMsg: public DragonMsg {
     std::string mFLI;
 };
 
-class SHCreateProcessLocalChannelResponseMsg: public DragonResponseMsg {
+class LSCreateProcessLocalChannelResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE;
+    static const MessageType TC = LS_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE;
 
-    SHCreateProcessLocalChannelResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* serChannel);
+    LSCreateProcessLocalChannelResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* serChannel);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* serChannel();
 
@@ -53,11 +53,11 @@ class SHCreateProcessLocalChannelResponseMsg: public DragonResponseMsg {
     std::string mSerChannel;
 };
 
-class SHDestroyProcessLocalChannelMsg: public DragonMsg {
+class LSDestroyProcessLocalChannelMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_DESTROY_PROCESS_LOCAL_CHANNEL;
+    static const MessageType TC = LS_DESTROY_PROCESS_LOCAL_CHANNEL;
 
-    SHDestroyProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t cuid, const char* respFLI);
+    LSDestroyProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t cuid, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* respFLI();
     const uint64_t puid();
@@ -72,19 +72,19 @@ class SHDestroyProcessLocalChannelMsg: public DragonMsg {
     std::string mFLI;
 };
 
-class SHDestroyProcessLocalChannelResponseMsg: public DragonResponseMsg {
+class LSDestroyProcessLocalChannelResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE;
+    static const MessageType TC = LS_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE;
 
-    SHDestroyProcessLocalChannelResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
+    LSDestroyProcessLocalChannelResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
 };
 
-class SHCreateProcessLocalPoolMsg: public DragonMsg {
+class LSCreateProcessLocalPoolMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_CREATE_PROCESS_LOCAL_POOL;
+    static const MessageType TC = LS_CREATE_PROCESS_LOCAL_POOL;
 
-    SHCreateProcessLocalPoolMsg(uint64_t tag, uint64_t puid, uint64_t size, uint64_t minBlockSize, const char* name, const size_t* preAllocs, const size_t numPreAllocs, const char* respFLI);
+    LSCreateProcessLocalPoolMsg(uint64_t tag, uint64_t puid, uint64_t size, uint64_t minBlockSize, const char* name, const size_t* preAllocs, const size_t numPreAllocs, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* respFLI();
     const uint64_t puid();
@@ -106,11 +106,11 @@ class SHCreateProcessLocalPoolMsg: public DragonMsg {
     std::vector<size_t> mPreAllocs;
 };
 
-class SHCreateProcessLocalPoolResponseMsg: public DragonResponseMsg {
+class LSCreateProcessLocalPoolResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_CREATE_PROCESS_LOCAL_POOL_RESPONSE;
+    static const MessageType TC = LS_CREATE_PROCESS_LOCAL_POOL_RESPONSE;
 
-    SHCreateProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* serPool);
+    LSCreateProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* serPool);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* serPool();
 
@@ -121,11 +121,11 @@ class SHCreateProcessLocalPoolResponseMsg: public DragonResponseMsg {
     std::string mSerPool;
 };
 
-class SHRegisterProcessLocalPoolMsg: public DragonMsg {
+class LSRegisterProcessLocalPoolMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_REGISTER_PROCESS_LOCAL_POOL;
+    static const MessageType TC = LS_REGISTER_PROCESS_LOCAL_POOL;
 
-    SHRegisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI);
+    LSRegisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     uint64_t puid();
     const char* respFLI();
@@ -140,19 +140,19 @@ class SHRegisterProcessLocalPoolMsg: public DragonMsg {
     std::string mRespFLI;
 };
 
-class SHRegisterProcessLocalPoolResponseMsg: public DragonResponseMsg {
+class LSRegisterProcessLocalPoolResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_REGISTER_PROCESS_LOCAL_POOL_RESPONSE;
+    static const MessageType TC = LS_REGISTER_PROCESS_LOCAL_POOL_RESPONSE;
 
-    SHRegisterProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
+    LSRegisterProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
 };
 
-class SHDeregisterProcessLocalPoolMsg: public DragonMsg {
+class LSDeregisterProcessLocalPoolMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_DEREGISTER_PROCESS_LOCAL_POOL;
+    static const MessageType TC = LS_DEREGISTER_PROCESS_LOCAL_POOL;
 
-    SHDeregisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI);
+    LSDeregisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     uint64_t puid();
     const char* respFLI();
@@ -167,19 +167,19 @@ class SHDeregisterProcessLocalPoolMsg: public DragonMsg {
     std::string mRespFLI;
 };
 
-class SHDeregisterProcessLocalPoolResponseMsg: public DragonResponseMsg {
+class LSDeregisterProcessLocalPoolResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE;
+    static const MessageType TC = LS_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE;
 
-    SHDeregisterProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
+    LSDeregisterProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
 };
 
-class SHSetKVMsg: public DragonMsg {
+class LSSetKVMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_SET_KV;
+    static const MessageType TC = LS_SET_KV;
 
-    SHSetKVMsg(uint64_t tag, const char* key, const char* value, const char* respFLI);
+    LSSetKVMsg(uint64_t tag, const char* key, const char* value, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* key();
     const char* value();
@@ -194,19 +194,19 @@ class SHSetKVMsg: public DragonMsg {
     std::string mFLI;
 };
 
-class SHSetKVResponseMsg: public DragonResponseMsg {
+class LSSetKVResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_SET_KV_RESPONSE;
+    static const MessageType TC = LS_SET_KV_RESPONSE;
 
-    SHSetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
+    LSSetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
 };
 
-class SHGetKVMsg: public DragonMsg {
+class LSGetKVMsg: public DragonMsg {
     public:
-    static const MessageType TC = SH_GET_KV;
+    static const MessageType TC = LS_GET_KV;
 
-    SHGetKVMsg(uint64_t tag, const char* key, const char* respFLI);
+    LSGetKVMsg(uint64_t tag, const char* key, const char* respFLI);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* key();
     const char* respFLI();
@@ -219,11 +219,11 @@ class SHGetKVMsg: public DragonMsg {
     std::string mFLI;
 };
 
-class SHGetKVResponseMsg: public DragonResponseMsg {
+class LSGetKVResponseMsg: public DragonResponseMsg {
     public:
-    static const MessageType TC = SH_GET_KV_RESPONSE;
+    static const MessageType TC = LS_GET_KV_RESPONSE;
 
-    SHGetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* value);
+    LSGetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* value);
     static dragonError_t deserialize(MessageDef::Reader& reader, DragonMsg** msg);
     const char* value();
 
@@ -1314,20 +1314,20 @@ class CPLoggingMessage: public DragonMsg {
 
 static unordered_map<MessageType, deserializeFun> deserializeFunctions
 {
-    {SH_CREATE_PROCESS_LOCAL_CHANNEL, &SHCreateProcessLocalChannelMsg::deserialize},
-    {SH_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE, &SHCreateProcessLocalChannelResponseMsg::deserialize},
-    {SH_DESTROY_PROCESS_LOCAL_CHANNEL, &SHDestroyProcessLocalChannelMsg::deserialize},
-    {SH_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE, &SHDestroyProcessLocalChannelResponseMsg::deserialize},
-    {SH_CREATE_PROCESS_LOCAL_POOL, &SHCreateProcessLocalPoolMsg::deserialize},
-    {SH_CREATE_PROCESS_LOCAL_POOL_RESPONSE, &SHCreateProcessLocalPoolResponseMsg::deserialize},
-    {SH_REGISTER_PROCESS_LOCAL_POOL, &SHRegisterProcessLocalPoolMsg::deserialize},
-    {SH_REGISTER_PROCESS_LOCAL_POOL_RESPONSE, &SHRegisterProcessLocalPoolResponseMsg::deserialize},
-    {SH_DEREGISTER_PROCESS_LOCAL_POOL, &SHDeregisterProcessLocalPoolMsg::deserialize},
-    {SH_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE, &SHDeregisterProcessLocalPoolResponseMsg::deserialize},
-    {SH_SET_KV, &SHSetKVMsg::deserialize},
-    {SH_SET_KV_RESPONSE, &SHSetKVResponseMsg::deserialize},
-    {SH_GET_KV, &SHGetKVMsg::deserialize},
-    {SH_GET_KV_RESPONSE, &SHGetKVResponseMsg::deserialize},
+    {LS_CREATE_PROCESS_LOCAL_CHANNEL, &LSCreateProcessLocalChannelMsg::deserialize},
+    {LS_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE, &LSCreateProcessLocalChannelResponseMsg::deserialize},
+    {LS_DESTROY_PROCESS_LOCAL_CHANNEL, &LSDestroyProcessLocalChannelMsg::deserialize},
+    {LS_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE, &LSDestroyProcessLocalChannelResponseMsg::deserialize},
+    {LS_CREATE_PROCESS_LOCAL_POOL, &LSCreateProcessLocalPoolMsg::deserialize},
+    {LS_CREATE_PROCESS_LOCAL_POOL_RESPONSE, &LSCreateProcessLocalPoolResponseMsg::deserialize},
+    {LS_REGISTER_PROCESS_LOCAL_POOL, &LSRegisterProcessLocalPoolMsg::deserialize},
+    {LS_REGISTER_PROCESS_LOCAL_POOL_RESPONSE, &LSRegisterProcessLocalPoolResponseMsg::deserialize},
+    {LS_DEREGISTER_PROCESS_LOCAL_POOL, &LSDeregisterProcessLocalPoolMsg::deserialize},
+    {LS_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE, &LSDeregisterProcessLocalPoolResponseMsg::deserialize},
+    {LS_SET_KV, &LSSetKVMsg::deserialize},
+    {LS_SET_KV_RESPONSE, &LSSetKVResponseMsg::deserialize},
+    {LS_GET_KV, &LSGetKVMsg::deserialize},
+    {LS_GET_KV_RESPONSE, &LSGetKVResponseMsg::deserialize},
     {DD_REGISTER_CLIENT, &DDRegisterClientMsg::deserialize},
     {DD_REGISTER_CLIENT_RESPONSE, &DDRegisterClientResponseMsg::deserialize},
     {DD_DEREGISTER_CLIENT, &DDDeregisterClientMsg::deserialize},

@@ -214,7 +214,7 @@ def main():
     args, remaining = parser.parse_known_args()
 
     # Check if running under Dragon runtime
-    if os.getenv("DRAGON_GS_RET_CD") is not None:
+    if os.getenv("DRAGON_GS_RET_QD") is not None:
         # Already in Dragon environment, run directly
         offline_telem = OfflineTelemetry()
         tables, db_name = offline_telem.merge_ts_dbs()

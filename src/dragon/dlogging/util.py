@@ -273,7 +273,7 @@ class DragonLoggingHandler(logging.StreamHandler):
             )
             self._dlog.put(msg)
         except Exception as err:
-                self.handleError(record)
+            self.handleError(record)
 
 
 def _clear_root_log_handlers():

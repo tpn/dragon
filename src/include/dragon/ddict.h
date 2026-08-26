@@ -386,7 +386,7 @@ dragon_ddict_write_bytes(const dragonDDictRequestDescr_t* req, size_t num_bytes,
  dragon_ddict_read_mem(const dragonDDictRequestDescr_t* req, dragonMemoryDescr_t* mem);
 
 
-/** @} */ // end of fli_sendrecv group.
+/** @} */ // end of ddict_sendrecv group.
 
 /** @defgroup ddict_ops
  *  Distributed Dictionary Operations

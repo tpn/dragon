@@ -48,11 +48,11 @@ dragonError_t test_local_keys(const char * ddict_ser, const size_t num_managers)
     bool found_key1 = false;
     bool found_key0 = false;
     for (auto key: local_keys) {
-        if (key.getVal() != x0.getVal() && key.getVal() != x1.getVal()) {
+        if (key.val() != x0.val() && key.val() != x1.val()) {
             err_fail(DRAGON_FAILURE, "Received unexpected local key.");
         }
-        found_key1 |= x1.getVal() == key.getVal();
-        found_key0 |= x0.getVal() == key.getVal();
+        found_key1 |= x1.val() == key.val();
+        found_key0 |= x0.val() == key.val();
     }
     assert(found_key1 && found_key0);
     return DRAGON_SUCCESS;

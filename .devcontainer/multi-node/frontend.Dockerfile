@@ -1,0 +1,99 @@
+FROM mcr.microsoft.com/devcontainers/base:ubuntu-24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+COPY zscaler-root-ca.cr[t] /usr/local/share/ca-certificates/zscaler-root-ca.crt
+
+# This is frequently needed by uv if you use it
+ENV SSL_CLIENT_CERT=/usr/local/share/ca-certificates/zscaler-root-ca.crt
+RUN apt-get update \
+    && apt-get install -y \
+    && apt-get install -y \
+    ca-certificates git \
+    make build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev \
+    libsqlite3-dev wget curl llvm libncursesw5-dev xz-utils tk-dev \
+    libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev \
+    vim-tiny openssh-client dnsutils && \
+    rm -rf /var/lib/apt/lists/* && \
+    update-ca-certificates
+
+
+
+# Download pyenv to install Python
+ENV PYENV_ROOT=/opt/pyenv
+RUN git clone https://github.com/pyenv/pyenv.git $PYENV_ROOT
+
+# Compile dynamic bash extension to speed up pyenv
+RUN cd $PYENV_ROOT && src/configure && make -C src
+
+# Build Python 3.12.12 by default.
+ARG python_version=3.12.12
+# Keep Python source files in /usr/local/src
+ENV PYTHON_BUILD_BUILD_PATH=/usr/local/src/
+# Install a Python with a shared object
+ENV PYTHON_CONFIGURE_OPTS="--enable-shared"
+# Build Python and clean-up downloaded tarball
+RUN /opt/pyenv/plugins/python-build/bin/python-build --verbose --keep ${python_version} /usr/local \
+    && rm -fr /usr/local/src/Python-${python_version}.tar.*
+
+# Install development tools required by Dragon
+RUN apt-get update \
+    && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y default-jdk doxygen git openssl sudo unzip util-linux clang-format \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install SRMStoFigs dependencies
+RUN apt-get update \
+    && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y imagemagick transfig \
+    && rm -rf /var/lib/apt/lists/*
+# See https://stackoverflow.com/questions/52998331/imagemagick-security-policy-pdf-blocking-conversion
+RUN sed -i '/disable ghostscript format types/,+6d' /etc/ImageMagick-6/policy.xml
+
+RUN curl https://raw.githubusercontent.com/git/git/master/contrib/completion/git-completion.bash -o ~/.git-completion.bash
+COPY git_completion.bash /tmp/git_completion.bash
+RUN cat /tmp/git_completion.bash >> ~/.bashrc
+
+# Install SRMStoFigs (required to build Dragon docs)
+RUN cd /usr/local/src && git clone https://github.com/kentdlee/SRMStoFigs.git
+RUN cd /usr/local/src/SRMStoFigs \
+    && make -B srmstofigs CC=gcc \
+    && install -D -m 755 srmstofigs srms2pdf srms2png /usr/local/bin
+
+# Additional packages for convenience
+RUN apt-get update \
+    && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y \
+    debianutils gdb git-lfs git-man graphviz man \
+    manpages manpages-dev manpages-posix manpages-posix-dev ssh psmisc \
+    rsync sshpass tree vim xfsprogs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python packages required by Dragon
+RUN /usr/local/bin/python3 -m ensurepip \
+    && /usr/local/bin/python3 -m pip install --no-cache-dir --upgrade pip
+
+# Packages for building dragon multinode dependencies
+RUN apt-get update \
+    && export DEBIAN_FRONTEND=noninteractive \
+    && apt-get install -y \
+    automake autopoint flex bison cmake libtool-bin elfutils \
+    libboost-all-dev libelf-dev libssh2-1-dev libarchive-dev libdwarf-dev \
+    libdw-dev libiberty-dev libacl1-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set up the SSH directory for the default 'vscode' user
+RUN mkdir -p /home/vscode/.ssh && chmod 700 /home/vscode/.ssh
+
+# Copy the private key
+COPY id_ed25519 /home/vscode/.ssh/id_ed25519
+RUN chmod 600 /home/vscode/.ssh/id_ed25519
+
+# Disable strict host checking for hassle-free internal container routing
+RUN echo "Host *\n\tStrictHostKeyChecking no\n\tUserKnownHostsFile /dev/null\n" > /home/vscode/.ssh/config
+ENV DRAGON_RUN_NODEFILE=/tmp/dragon-nodefile.txt
+
+# Apply proper ownership to the vscode user
+RUN chown -R vscode:vscode /home/vscode/.ssh
+
+WORKDIR /home/dragonhpc

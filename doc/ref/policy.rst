@@ -1,3 +1,5 @@
+.. _policy-placement:
+
 Resource Placement and Affinity
 +++++++++++++++++++++++++++++++
 

@@ -49,7 +49,7 @@ be stored and retrieved to/from it. Other example code can be found in
       manager_id = dd.which_manager(x); // Sample code, not needed here.
       dd[x] = y; // Stores the key x and maps it to y in the DDict dd.
       SerializableInt z = dd[x]; //Looks up key x to find its value.
-      assert (z.getVal() == 42);
+      assert (z.val() == 42);
    }
 
 C++ API Reference

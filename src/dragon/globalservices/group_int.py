@@ -51,7 +51,7 @@ class PMIJobHelper:
         self.job_id = self.get_next_pmi_job_id()
         self.nranks = self.get_nranks()
 
-        (self.nid_map, self.host_map, self.ppn_map, self.lrank_list) = self.get_nid_and_host_data()
+        self.nid_map, self.host_map, self.ppn_map, self.lrank_list = self.get_nid_and_host_data()
         self.pmi_h_uid_list = list(self.ppn_map.keys())
 
         self.pmi_nnodes = len(self.host_map)
@@ -225,19 +225,19 @@ class PMIJobHelper:
 class GroupContext:
     """Everything to do with a single group of resources in global services.
 
-    This object manages all the transactions to a shepherd concerning
+    This object manages all the transactions to a local services concerning
     the lifecycle of a group.
     """
 
-    def __init__(self, server, request, reply_channel, g_uid, policy, pmi_job_helper):
+    def __init__(self, server, request, reply_queue, g_uid, policy, pmi_job_helper):
         """_summary_
 
         :param server: _description_
         :type server: _type_
         :param request: _description_
         :type request: _type_
-        :param reply_channel: _description_
-        :type reply_channel: _type_
+        :param reply_queue: _description_
+        :type reply_queue: _type_
         :param g_uid: _description_
         :type g_uid: _type_
         :param policy: _description_
@@ -247,13 +247,13 @@ class GroupContext:
         """
         self.server = server
         self.request = request
-        self.reply_channel = reply_channel
+        self.reply_queue = reply_queue
         self.destroy_request = None
         self.destroy_pmix_request = None
         self.pmi_job_helper = pmi_job_helper
         self.destroy_called = False
         self.destroy_remove_success_ids = None  # used when destroy_remove is called to keep the items to be
-        # destroyed after having received all the SHProcessKillResponse messages
+        # destroyed after having received all the LSProcessKillResponse messages
         self._descriptor = group_desc.GroupDescriptor(
             g_uid=g_uid, name=request.user_name, policy=policy, resilient=server.resilient_groups
         )
@@ -266,9 +266,9 @@ class GroupContext:
         return self._descriptor
 
     def _update_group_member(self, this_guid, member, lst_idx, item_idx, related_to_create=True):
-        self.server.group_table[this_guid].descriptor.sets[lst_idx][
-            item_idx
-        ] = group_desc.GroupDescriptor.GroupMember.from_sdict(member)
+        self.server.group_table[this_guid].descriptor.sets[lst_idx][item_idx] = (
+            group_desc.GroupDescriptor.GroupMember.from_sdict(member)
+        )
         # update the count that measures the number of responses we have received when we're creating the resources
         if related_to_create:
             if self.server.group_resource_count[this_guid][lst_idx] >= 1:
@@ -350,7 +350,7 @@ class GroupContext:
             raise GroupError("An invalid message type was provided.")
 
     @classmethod
-    def construct(cls, server, msg, reply_channel):
+    def construct(cls, server, msg, reply_queue):
         """Starts the resources that belong to the requested group.
         It also creates a GroupContext and registers it with the server.
 
@@ -358,8 +358,8 @@ class GroupContext:
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: GSGroupCreate message
         :type msg: dragon.infrastructure.messages.GSGroupCreate
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises NotImplementedError: when a channel is requested as a member resource
         :raises NotImplementedError: when a memory pool is requested as a member resource
         :raises GroupError: when the message for the requested resources is of unknown type
@@ -372,7 +372,7 @@ class GroupContext:
                 LOG.info(f"group name {msg.user_name} in use")
                 existing_ctx = server.group_table[server.group_names[msg.user_name]]
                 rm = dmsg.GSGroupCreateResponse(tag=server.tag_inc(), ref=msg.tag, desc=existing_ctx.descriptor)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 return False
 
             this_guid, auto_name = server.new_guid_and_default_name()
@@ -412,7 +412,7 @@ class GroupContext:
             group_context = cls(
                 server=server,
                 request=msg,
-                reply_channel=reply_channel,
+                reply_queue=reply_queue,
                 g_uid=this_guid,
                 policy=group_policy,
                 pmi_job_helper=pmi_job_helper,
@@ -420,9 +420,9 @@ class GroupContext:
 
             server.group_names[msg.user_name] = this_guid
             server.group_table[this_guid] = group_context
-            server.group_resource_count[
-                this_guid
-            ] = []  # list of items corresponding to the multiplicity of each list in server.group_resource_list
+            server.group_resource_count[this_guid] = (
+                []
+            )  # list of items corresponding to the multiplicity of each list in server.group_resource_list
 
             # Maps a given node (local services instance) to a list of
             # ProcessContexts that are to be created on that instance
@@ -470,10 +470,13 @@ class GroupContext:
                                     LOG.info("%s", resource_copy._pmi_info)
 
                             success, outbound_tag, proc_context = ProcessContext.construct(
-                                server, resource_copy, reply_channel, send_msg=False, belongs_to_group=True
+                                server, resource_copy, reply_queue, send_msg=False, belongs_to_group=True
                             )
 
-                            server.resource_to_group_map[proc_context.descriptor.p_uid] = (this_guid, (tuple_idx, item_idx))
+                            server.resource_to_group_map[proc_context.descriptor.p_uid] = (
+                                this_guid,
+                                (tuple_idx, item_idx),
+                            )
 
                             if success and outbound_tag and proc_context:
                                 ls_proccontext_map[proc_context.node].append(proc_context)
@@ -515,11 +518,11 @@ class GroupContext:
 
                         elif isinstance(resource_msg, dmsg.GSChannelCreate):
                             raise NotImplementedError
-                            # ChannelContext.construct(server, msg, reply_channel,
+                            # ChannelContext.construct(server, msg, reply_queue,
                             #                          belongs_to_group=True)
                         elif isinstance(resource_msg, dmsg.GSPoolCreate):
                             raise NotImplementedError
-                            # PoolContext.construct(server, msg, reply_channel,
+                            # PoolContext.construct(server, msg, reply_queue,
                             #                       belongs_to_group=True)
                         else:
                             raise GroupError(f"Unknown msg type {resource_msg} for a Group member.")
@@ -527,9 +530,9 @@ class GroupContext:
                     raise GroupError("The Group should include at least one member in each subgroup.")
 
             # If PMI is required, we need to send these common PMI options.
-            # By sending them as part of the SHMultiProcessCreate message,
+            # By sending them as part of the LSMultiProcessCreate message,
             # we limit the duplication of these common vaules in each embedded
-            # SHProcessCreate message, reducing the overall message size.
+            # LSProcessCreate message, reducing the overall message size.
             pmi_group_info: dmsg.PMIGroupInfo = None
             if pmi_job_helper:
                 pmi_group_info: dmsg.PMIGroupInfo = dmsg.PMIGroupInfo(
@@ -545,17 +548,17 @@ class GroupContext:
                 LOG.debug("PMIGroupInfo: %s", pmi_group_info)
 
             for node, contexts in ls_proccontext_map.items():
-                procs = [context.shprocesscreate_msg for context in contexts]
-                shep_req = dmsg.SHMultiProcessCreate(
+                procs = [context.lsprocesscreate_msg for context in contexts]
+                ls_req = dmsg.LSMultiProcessCreate(
                     tag=server.tag_inc(),
                     r_c_uid=dfacts.GS_INPUT_CUID,
                     pmi_group_info=pmi_group_info,
                     procs=procs,
                     guid=this_guid,
                 )
-                shep_hdl = server.shep_inputs[node]
-                server.pending_sends.put((shep_hdl, shep_req.serialize()))
-                LOG.debug(f"request %s to shep %d", shep_req, node)
+                ls_hdl = server.ls_inputs[node]
+                server.pending_sends.put((ls_hdl, ls_req))
+                LOG.debug("request %s to ls %d", ls_req, node)
 
             return True
 
@@ -568,7 +571,7 @@ class GroupContext:
                 err_info=str(ex),
             )
 
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
 
     def _construction_helper(self, msg):
         # get the resource context corresponding to this response message
@@ -593,7 +596,7 @@ class GroupContext:
         # complete the construction of this resource without sending any response messages to the client
         succeeded = proc_context.complete_construction(msg, send_msg=False)
 
-        if dmsg.SHProcessCreateResponse.Errors.SUCCESS == msg.err:
+        if dmsg.LSProcessCreateResponse.Errors.SUCCESS == msg.err:
             # this process is successfully created
             member = self._generate_member(guid, proc_context, None)
 
@@ -601,7 +604,7 @@ class GroupContext:
             if not succeeded:
                 member = self._generate_member(guid, proc_context, "stdin/stdout/stderr", channel_related=True)
 
-        elif dmsg.SHProcessCreateResponse.Errors.FAIL == msg.err:
+        elif dmsg.LSProcessCreateResponse.Errors.FAIL == msg.err:
             member = self._generate_member(guid, proc_context, msg.err_info)
 
             del self.server.resource_to_group_map[this_puid]
@@ -625,8 +628,8 @@ class GroupContext:
     def complete_construction(self, msg):
         """Completes construction of a new managed group.
 
-        :param msg: SHProcessCreateResponse message
-        :type msg: dragon.infrastructure.messages.SHProcessCreateResponse
+        :param msg: LSProcessCreateResponse message
+        :type msg: dragon.infrastructure.messages.LSProcessCreateResponse
         :raises GroupError: when the context corresponding to the pending resource cannot be found
         :raises RuntimeError: when the message error is of unknown type
         :return: True or False according to success
@@ -649,7 +652,7 @@ class GroupContext:
                 response = dmsg.GSGroupCreateResponse(
                     tag=self.server.tag_inc(), ref=self.request.tag, desc=self.descriptor
                 )
-                self.reply_channel.send(response.serialize())
+                self.reply_queue.put(response)
                 LOG.debug(f"create response sent, tag {response.tag} ref {response.ref} pending cleared")
 
         # since this server.pending entry was related to a particular outbound tag
@@ -658,15 +661,15 @@ class GroupContext:
         return succeeded
 
     @staticmethod
-    def add(server, msg, reply_channel):
+    def add(server, msg, reply_queue):
         """Action to add existing resources to a group.
 
         :param server: global server context object
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: addTo request message
         :type msg: dragon.infrastructure.messages.GSGroupAddTo
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises GroupError: if the list of items to add is empty
         :raises NotImplementedError: when the group's state is unknown, i.e., other than ACTIVE, DEAD, PENDING
         :return: True if a successful addTo response message was issued and False otherwise
@@ -684,7 +687,7 @@ class GroupContext:
 
             if not found:
                 rm = gsgar(tag=server.tag_inc(), ref=msg.tag, err=gsgar.Errors.UNKNOWN, err_info=errmsg)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
                 return succeeded
             else:
@@ -694,7 +697,7 @@ class GroupContext:
 
                 if gds.DEAD == groupdesc.state:
                     rm = gsgar(tag=server.tag_inc(), ref=msg.tag, err=gsgar.Errors.DEAD)
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(f"group dead, response to {msg}: {rm}")
                     return succeeded
 
@@ -710,7 +713,7 @@ class GroupContext:
                         err=gsgar.Errors.PENDING,
                         err_info=f"group {target_uid} is pending",
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(
                         f"group pending while add_to request -- this should not be happening, response to {msg}: {rm}"
                     )
@@ -720,7 +723,7 @@ class GroupContext:
                     groupdesc.state = gds.PENDING
 
                     groupctx.request = msg
-                    groupctx.reply_channel = reply_channel
+                    groupctx.reply_queue = reply_queue
                     existing_lists = len(groupdesc.sets)
 
                     failed_ids = []  # keep potential resources that were not found or were dead
@@ -762,7 +765,7 @@ class GroupContext:
                         succeeded = True
 
                     groupdesc.state = gds.ACTIVE
-                    reply_channel.send(response.serialize())
+                    reply_queue.put(response)
                     LOG.debug(f"addition response sent, tag {response.tag} ref {response.ref} pending cleared")
 
                     return succeeded
@@ -771,19 +774,18 @@ class GroupContext:
                     raise NotImplementedError("close case")
         except Exception as ex:
             response = gsgar(tag=server.tag_inc(), ref=msg.tag, err=gsgar.Errors.FAIL, err_info=str(ex))
-            reply_channel.send(response.serialize())
-
+            reply_queue.put(response)
 
     @staticmethod
-    def create_add(server, msg, reply_channel):
+    def create_add(server, msg, reply_queue):
         """Action to first create resources and then add them to an existing group.
 
         :param server: global server context object
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: addTo request message
         :type msg: dragon.infrastructure.messages.GSGroupCreateAddTo
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises GroupError: when the message for the requested resources is of unknown type
         :raises GroupError: if a replication factor `n` of any tuple is less than 1
         :raises NotImplementedError: when the group's state is unknown, i.e., other than ACTIVE, DEAD, PENDING
@@ -797,7 +799,7 @@ class GroupContext:
 
             if not found:
                 rm = gsgacr(tag=server.tag_inc(), ref=msg.tag, err=gsgacr.Errors.UNKNOWN, err_info=errmsg)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
                 return False
             else:
@@ -807,7 +809,7 @@ class GroupContext:
 
                 if gds.DEAD == groupdesc.state:
                     rm = gsgacr(tag=server.tag_inc(), ref=msg.tag, err=gsgacr.Errors.DEAD)
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(f"group dead, response to {msg}: {rm}")
                     return False
 
@@ -823,7 +825,7 @@ class GroupContext:
                         err=gsgacr.Errors.PENDING,
                         err_info=f"group {target_uid} is pending",
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(
                         f"group pending while create_add request -- this should not be happening, response to {msg}: {rm}"
                     )
@@ -833,7 +835,7 @@ class GroupContext:
                     groupdesc.state = gds.PENDING
 
                     groupctx.request = msg
-                    groupctx.reply_channel = reply_channel
+                    groupctx.reply_queue = reply_queue
 
                     if msg.policy:
                         policy = Policy.merge(Policy.global_policy(), msg.policy)
@@ -893,7 +895,7 @@ class GroupContext:
                                     success, outbound_tag, proc_context = ProcessContext.construct(
                                         server,
                                         resource_copy,
-                                        reply_channel,
+                                        reply_queue,
                                         send_msg=False,
                                         belongs_to_group=True,
                                         addition=True,
@@ -909,7 +911,9 @@ class GroupContext:
                                         server.pending[outbound_tag] = groupctx.complete_addition
                                         server.group_to_pending_resource_map[(outbound_tag, target_uid)] = proc_context
                                     else:
-                                        if proc_context and outbound_tag == "already":  # the process was already created
+                                        if (
+                                            proc_context and outbound_tag == "already"
+                                        ):  # the process was already created
                                             member = {
                                                 "state": proc_context.descriptor.state,
                                                 "uid": proc_context.descriptor.p_uid,
@@ -939,11 +943,11 @@ class GroupContext:
 
                                 elif isinstance(resource_msg, dmsg.GSChannelCreate):
                                     raise NotImplementedError
-                                    # ChannelContext.construct(server, msg, reply_channel,
+                                    # ChannelContext.construct(server, msg, reply_queue,
                                     #                          belongs_to_group=True)
                                 elif isinstance(resource_msg, dmsg.GSPoolCreate):
                                     raise NotImplementedError
-                                    # PoolContext.construct(server, msg, reply_channel,
+                                    # PoolContext.construct(server, msg, reply_queue,
                                     #                       belongs_to_group=True)
                                 else:
                                     raise GroupError(f"Unknown msg type {resource_msg} for a Group member.")
@@ -951,26 +955,26 @@ class GroupContext:
                             raise GroupError("The Group should include at least one member in each subgroup.")
 
                     for node, contexts in ls_proccontext_map.items():
-                        procs = [context.shprocesscreate_msg for context in contexts]
-                        shep_req = dmsg.SHMultiProcessCreate(
+                        procs = [context.lsprocesscreate_msg for context in contexts]
+                        ls_req = dmsg.LSMultiProcessCreate(
                             tag=server.tag_inc(), r_c_uid=dfacts.GS_INPUT_CUID, procs=procs
                         )
-                        shep_hdl = server.shep_inputs[node]
-                        server.pending_sends.put((shep_hdl, shep_req.serialize()))
-                        LOG.debug(f"request %s to shep %d", shep_req, node)
+                        ls_hdl = server.ls_inputs[node]
+                        server.pending_sends.put((ls_hdl, ls_req))
+                        LOG.debug("request %s to ls %d", ls_req, node)
 
                 else:
                     raise NotImplementedError("close case")
 
         except Exception as ex:
             rm = gsgacr(tag=server.tag_inc(), ref=msg.tag, err=gsgacr.Errors.FAIL, err_info=str(ex))
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
 
     def complete_addition(self, msg):
         """Completes the addition of new resources to a managed group.
 
-        :param msg: SHProcessCreateResponse message
-        :type msg: dragon.infrastructure.messages.SHProcessCreateResponse
+        :param msg: LSProcessCreateResponse message
+        :type msg: dragon.infrastructure.messages.LSProcessCreateResponse
         :raises GroupError: when the context corresponding to the pending resource cannot be found
         :raises RuntimeError: when the message error is of unknown type
         :return: True or False according to success
@@ -997,7 +1001,7 @@ class GroupContext:
                     err=dmsg.GSGroupCreateAddToResponse.Errors.SUCCESS,
                     desc=self.descriptor,
                 )
-                self.reply_channel.send(response.serialize())
+                self.reply_queue.put(response)
                 LOG.debug(f"addition response sent, tag {response.tag} ref {response.ref} pending cleared")
 
         # since this server.pending entry was related to a particular outbound tag
@@ -1006,7 +1010,7 @@ class GroupContext:
         return succeeded
 
     @staticmethod
-    def remove(server, msg, reply_channel):
+    def remove(server, msg, reply_queue):
         """Action to remove resources from a group.
         If there is at least one resource that is not found in the group, then we do not proceed with
         the removal request and we return a FAIL response message back to the client.
@@ -1015,8 +1019,8 @@ class GroupContext:
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: removeFrom request message
         :type msg: dragon.infrastructure.messages.GSGroupRemoveFrom
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises GroupError: if the list of items to remove is empty
         :raises NotImplementedError: when the group's state is unknown, i.e., other than ACTIVE, DEAD, PENDING
         :return: True if a successful removeFrom response message was issued and False otherwise
@@ -1033,7 +1037,7 @@ class GroupContext:
 
         if not found:
             rm = gsgrr(tag=server.tag_inc(), ref=msg.tag, err=gsgrr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
             return succeeded
         else:
@@ -1043,7 +1047,7 @@ class GroupContext:
 
             if gds.DEAD == groupdesc.state:
                 rm = gsgrr(tag=server.tag_inc(), ref=msg.tag, err=gsgrr.Errors.DEAD)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"group dead, response to {msg}: {rm}")
                 return succeeded
 
@@ -1059,7 +1063,7 @@ class GroupContext:
                     err=gsgrr.Errors.PENDING,
                     err_info=f"group {target_uid} is pending",
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(
                     f"group pending while remove request -- this should not be happening, response to {msg}: {rm}"
                 )
@@ -1069,7 +1073,7 @@ class GroupContext:
                 groupdesc.state = gds.PENDING
 
                 groupctx.request = msg
-                groupctx.reply_channel = reply_channel
+                groupctx.reply_queue = reply_queue
 
                 failed_ids = []  # keep potential resources that were not found to be members of the group
                 success_ids = []
@@ -1095,7 +1099,7 @@ class GroupContext:
                     succeeded = True
 
                 groupdesc.state = gds.ACTIVE
-                reply_channel.send(response.serialize())
+                reply_queue.put(response)
                 LOG.debug(f"removal response sent, tag {response.tag} ref {response.ref}")
 
                 return succeeded
@@ -1104,7 +1108,7 @@ class GroupContext:
                 raise NotImplementedError("close case")
 
     @staticmethod
-    def destroy_remove(server, msg, reply_channel):
+    def destroy_remove(server, msg, reply_queue):
         """Action to remove resources from a group and also destroy these resources.
         For processes we call process.kill (sends a SIGKILL signal) and for other
         types of resources we call destroy.
@@ -1115,8 +1119,8 @@ class GroupContext:
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: DestroyRemoveFrom request message
         :type msg: dragon.infrastructure.messages.GSGroupDestroyRemoveFrom
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises GroupError: if the list of items to remove is empty
         :raises NotImplementedError: when the group's state is unknown, i.e., other than ACTIVE, DEAD, PENDING
         :return: True if a successful DestroyRemoveFrom response message was issued and False otherwise
@@ -1133,7 +1137,7 @@ class GroupContext:
 
         if not found:
             rm = gsgdrr(tag=server.tag_inc(), ref=msg.tag, err=gsgdrr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
             return succeeded
         else:
@@ -1143,7 +1147,7 @@ class GroupContext:
 
             if gds.DEAD == groupdesc.state:
                 rm = gsgdrr(tag=server.tag_inc(), ref=msg.tag, err=gsgdrr.Errors.DEAD)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"group dead, response to {msg}: {rm}")
                 return succeeded
 
@@ -1159,7 +1163,7 @@ class GroupContext:
                     err=gsgdrr.Errors.PENDING,
                     err_info=f"group {target_uid} is pending",
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(
                     f"group pending while destroy_remove request -- this should not be happening, response to {msg}: {rm}"
                 )
@@ -1169,7 +1173,7 @@ class GroupContext:
                 groupdesc.state = gds.PENDING
 
                 groupctx.destroy_request = msg
-                groupctx.reply_channel = reply_channel
+                groupctx.reply_queue = reply_queue
 
                 server.group_destroy_resource_count[target_uid] = []
 
@@ -1187,7 +1191,7 @@ class GroupContext:
                     response = gsgdrr(tag=server.tag_inc(), ref=msg.tag, err=gsgdrr.Errors.FAIL, err_info=errmsg)
                     del failed_ids
                     groupdesc.state = gds.ACTIVE
-                    reply_channel.send(response.serialize())
+                    reply_queue.put(response)
                     LOG.debug(f"DestroyRemoveFrom response sent, tag {response.tag} ref {response.ref}")
                 else:
                     ls_kill_context_map: Dict[int, List[ProcessContext]] = defaultdict(list)
@@ -1201,7 +1205,7 @@ class GroupContext:
                         else:
                             # call kill on the process
                             # this process will be removed from the group after the completion of the pending
-                            # SHKillProcess request and this happens in complete_kill()
+                            # LSKillProcess request and this happens in complete_kill()
                             resource_msg = groupctx._mk_gs_proc_kill(item.uid)
                             issued, outbound_tag = ProcessContext.kill(
                                 server, resource_msg, dutil.AbsorbingChannel(), send_msg=False
@@ -1228,13 +1232,13 @@ class GroupContext:
                                 groupdesc.sets[lst_idx][item_idx].desc.state = pctx.descriptor.state
 
                     for node, contexts in ls_kill_context_map.items():
-                        procs = [context.shep_kill_msg for context in contexts]
-                        shep_req = dmsg.SHMultiProcessKill(
+                        procs = [context.ls_kill_msg for context in contexts]
+                        ls_req = dmsg.LSMultiProcessKill(
                             tag=server.tag_inc(), r_c_uid=dfacts.GS_INPUT_CUID, procs=procs
                         )
-                        shep_hdl = server.shep_inputs[node]
-                        server.pending_sends.put((shep_hdl, shep_req.serialize()))
-                        LOG.debug(f"request %s to shep %d", shep_req, node)
+                        ls_hdl = server.ls_inputs[node]
+                        server.pending_sends.put((ls_hdl, ls_req))
+                        LOG.debug("request %s to ls %d", ls_req, node)
 
                 # in this case, all the processes were already dead or no pending continuation
                 # was issued and we need to send a response to the client
@@ -1245,7 +1249,7 @@ class GroupContext:
                     response = gsgdrr(tag=server.tag_inc(), ref=msg.tag, err=gsgdrr.Errors.SUCCESS, desc=groupdesc)
                     succeeded = True
                     groupdesc.state = gds.ACTIVE
-                    reply_channel.send(response.serialize())
+                    reply_queue.put(response)
                     LOG.debug(f"destroy_remove response sent, tag {response.tag} ref {response.ref}")
                 return succeeded
             else:
@@ -1262,7 +1266,7 @@ class GroupContext:
         )
 
     @staticmethod
-    def kill(server, msg, reply_channel):
+    def kill(server, msg, reply_queue):
         """Action to to send the processes belonging to a specified group
         a specified signal.
 
@@ -1270,8 +1274,8 @@ class GroupContext:
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: kill request message
         :type msg: dragon.infrastructure.messages.GSGroupKill
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises NotImplementedError: when the group's state is unknown, i.e., other than ACTIVE, DEAD, PENDING
         :return: True if a successful kill message was issued and False otherwise
         :rtype: bool
@@ -1281,7 +1285,7 @@ class GroupContext:
 
         if not found:
             rm = gsgkr(tag=server.tag_inc(), ref=msg.tag, err=gsgkr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
             return False
         else:
@@ -1291,7 +1295,7 @@ class GroupContext:
 
             if gds.DEAD == groupdesc.state:
                 rm = gsgkr(tag=server.tag_inc(), ref=msg.tag, err=gsgkr.Errors.DEAD)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"group dead, response to {msg}: {rm}")
                 return False
 
@@ -1307,13 +1311,13 @@ class GroupContext:
                     err=gsgkr.Errors.PENDING,
                     err_info=f"group {target_uid} is pending",
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"group pending while kill request -- this should not be happening, response to {msg}: {rm}")
                 return False
             elif gds.ACTIVE == groupdesc.state:
                 groupdesc.state = gds.PENDING
                 groupctx.destroy_request = msg
-                groupctx.reply_channel = reply_channel
+                groupctx.reply_queue = reply_queue
 
                 ls_kill_context_map: Dict[int, List[ProcessContext]] = defaultdict(list)
 
@@ -1353,20 +1357,20 @@ class GroupContext:
                                     groupdesc.sets[lst_idx][item_idx].desc.state = pctx.descriptor.state
                 if issued_pendings:
                     for node, contexts in ls_kill_context_map.items():
-                        procs = [context.shep_kill_msg for context in contexts]
-                        shep_req = dmsg.SHMultiProcessKill(
+                        procs = [context.ls_kill_msg for context in contexts]
+                        ls_req = dmsg.LSMultiProcessKill(
                             tag=server.tag_inc(), r_c_uid=dfacts.GS_INPUT_CUID, procs=procs
                         )
-                        shep_hdl = server.shep_inputs[node]
-                        server.pending_sends.put((shep_hdl, shep_req.serialize()))
-                        LOG.debug(f"request %s to shep %d", shep_req, node)
+                        ls_hdl = server.ls_inputs[node]
+                        server.pending_sends.put((ls_hdl, ls_req))
+                        LOG.debug("request %s to ls %d", ls_req, node)
                 else:
                     # there were no pending requests issued and we need to send a response to the client
                     # We consider this case as a success; for example, all the processes were already dead
                     rm = gsgkr(tag=server.tag_inc(), ref=msg.tag, err=gsgkr.Errors.ALREADY, desc=groupdesc)
                     LOG.debug(f"sending kill response to request {msg}: {rm} -- all processes were already dead")
                     groupdesc.state = gds.ACTIVE
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                 return issued_pendings
             else:
                 raise NotImplementedError("close case")
@@ -1375,7 +1379,7 @@ class GroupContext:
         """Completes the action of a group kill.
 
         :param msg: response message related to destroying a resource which is member to a group
-        :type msg: dragon.infrastructure.messages.SHProcessKillResponse
+        :type msg: dragon.infrastructure.messages.LSProcessKillResponse
         :raises GroupError: when the context corresponding to the pending resource cannot be found
         :raises NotImplementedError: when we receive an unknown response error related to a group's resource/member
         :return: True if killing the process of the group succeeded False otherwise.
@@ -1384,9 +1388,9 @@ class GroupContext:
         # TODO: implement for other types of resources apart from processes
 
         gsgkr = dmsg.GSGroupKillResponse
-        shpkr = dmsg.SHProcessKillResponse
+        lspkr = dmsg.LSProcessKillResponse
 
-        if msg.err not in shpkr.Errors:
+        if msg.err not in lspkr.Errors:
             raise NotImplementedError("close case")
 
         # get the resource context corresponding to this response message
@@ -1401,10 +1405,10 @@ class GroupContext:
         guid, (lst_idx, item_idx) = self.server.resource_to_group_map[this_puid]
 
         # complete the kill of this process without sending any response messages to the client
-        # as we've set the reply_channel of the process context to dutil.AbsorbingChannel() in kill() above
+        # as we've set the reply_queue of the process context to dutil.AbsorbingChannel() in kill() above
         succeeded = proc_context.complete_kill(msg)
         # TODO: should we do anything if succeeded is False, which means that the
-        # SHProcessKillResponse was a FAIL?
+        # LSProcessKillResponse was a FAIL?
 
         if not self.destroy_remove_success_ids:
             # update the member's state accordingly
@@ -1436,7 +1440,7 @@ class GroupContext:
                     desc=self.descriptor,
                 )
                 LOG.debug(f"sending remove_destroy response to request {self.destroy_request}: {rm}")
-                self.reply_channel.send(rm.serialize())
+                self.reply_queue.put(rm)
 
                 del self.server.group_destroy_resource_count[guid]
 
@@ -1464,12 +1468,12 @@ class GroupContext:
                         desc=self.descriptor,
                     )
                     LOG.debug(f"sending kill response to request {self.destroy_request}: {rm}")
-                    self.reply_channel.send(rm.serialize())
+                    self.reply_queue.put(rm)
 
         return succeeded
 
     @staticmethod
-    def destroy(server, msg, reply_channel):
+    def destroy(server, msg, reply_queue):
         """Action to destroy this group of resources.
         We need to destroy all the members of the group as well as the container.
 
@@ -1477,8 +1481,8 @@ class GroupContext:
         :type server: dragon.globalservices.server.GlobalContext
         :param msg: destroy request message
         :type msg: dragon.infrastructure.messages.GSGroupDestroy
-        :param reply_channel: the handle needed to reply to this message
-        :type reply_channel: dragon.infrastructure.connection.Connection
+        :param reply_queue: the handle needed to reply to this message
+        :type reply_queue: dragon.infrastructure.connection.Connection
         :raises NotImplementedError: when the group's state is unknown, i.e., other than ACTIVE, DEAD, PENDING
         :return: True if a successful destroy message was issued and False otherwise
         :rtype: bool
@@ -1488,7 +1492,7 @@ class GroupContext:
 
         if not found:
             rm = gsgdr(tag=server.tag_inc(), ref=msg.tag, err=gsgdr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
             return False
         else:
@@ -1498,7 +1502,7 @@ class GroupContext:
 
             if gds.DEAD == groupdesc.state:
                 rm = gsgdr(tag=server.tag_inc(), ref=msg.tag, err=gsgdr.Errors.DEAD)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"group dead, response to {msg}: {rm}")
                 return False
 
@@ -1514,7 +1518,7 @@ class GroupContext:
                     err=gsgdr.Errors.PENDING,
                     err_info=f"group {target_uid} is pending",
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(
                     f"group pending while destroy request -- this should not be happening, response to {msg}: {rm}"
                 )
@@ -1524,7 +1528,7 @@ class GroupContext:
                 groupdesc.state = gds.PENDING
 
                 groupctx.destroy_request = msg
-                groupctx.reply_channel = reply_channel
+                groupctx.reply_queue = reply_queue
 
                 server.group_destroy_resource_count[target_uid] = []
 
@@ -1556,8 +1560,8 @@ class GroupContext:
                                     item_idx
                                 ].desc.state = process_desc.ProcessDescriptor.State.PENDING
 
-                                # this is needed for identification after GS having received SHProcessExit msg
-                                # because the SHProcessExit msg will have a different tag
+                                # this is needed for identification after GS having received LSProcessExit msg
+                                # because the LSProcessExit msg will have a different tag
                                 server.pending_group_destroy[item.uid] = groupctx.complete_destruction
                                 server.group_to_pending_resource_map[(outbound_tag, target_uid)] = server.process_table[
                                     item.uid
@@ -1574,21 +1578,21 @@ class GroupContext:
                                 groupdesc.sets[lst_idx][item_idx].desc.state = process_desc.ProcessDescriptor.State.DEAD
 
                 for node, contexts in ls_kill_context_map.items():
-                    procs = [context.shep_kill_msg for context in contexts]
-                    shep_req = dmsg.SHMultiProcessKill(tag=server.tag_inc(), r_c_uid=dfacts.GS_INPUT_CUID, procs=procs)
-                    shep_hdl = server.shep_inputs[node]
-                    server.pending_sends.put((shep_hdl, shep_req.serialize()))
-                    LOG.debug("request %s to shep %d", shep_req, node)
+                    procs = [context.ls_kill_msg for context in contexts]
+                    ls_req = dmsg.LSMultiProcessKill(tag=server.tag_inc(), r_c_uid=dfacts.GS_INPUT_CUID, procs=procs)
+                    ls_hdl = server.ls_inputs[node]
+                    server.pending_sends.put((ls_hdl, ls_req))
+                    LOG.debug("request %s to ls %d", ls_req, node)
 
                 # in this case, all the processes were already dead or no pending continuation
                 # was issued and we need to send a response to the client
-                # e.g., kill was called prior to destroy and the kill request completed successully (SHProcessExit was sent)
+                # e.g., kill was called prior to destroy and the kill request completed successully (LSProcessExit was sent)
                 if all(item == 0 for item in server.group_destroy_resource_count[target_uid]):
                     groupdesc.state = gds.DEAD
                     if groupctx.pmi_job_helper:
                         groupctx.pmi_job_helper.cleanup()
                     rm = gsgdr(tag=server.tag_inc(), ref=msg.tag, err=gsgdr.Errors.SUCCESS, desc=groupdesc)
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(f"sending destroy response to request {msg}: {rm}")
 
                     # no need to keep this entry since the group is destroyed
@@ -1604,14 +1608,14 @@ class GroupContext:
         the kill request is being completed.
 
         :param msg: response message related to destroying a resource which is member to a group
-        :type msg: dragon.infrastructure.messages.SHProcessExit
+        :type msg: dragon.infrastructure.messages.LSProcessExit
         :raises GroupError: when the context corresponding to the pending resource cannot be found
         :raises NotImplementedError: when we receive an unknown response error related to a group's resource/member
         """
         # TODO: implement for other types of resources apart from processes
 
-        if not isinstance(msg, dmsg.SHProcessExit):
-            raise GroupError(f"Received msg type {msg} - expected an SHProcessExit msg.")
+        if not isinstance(msg, dmsg.LSProcessExit):
+            raise GroupError(f"Received msg type {msg} - expected an LSProcessExit msg.")
 
         gsgdr = dmsg.GSGroupDestroyResponse
 
@@ -1647,7 +1651,7 @@ class GroupContext:
                     desc=self.descriptor,
                 )
                 LOG.debug(f"sending destroy response to request {self.destroy_request}: {rm}")
-                self.reply_channel.send(rm.serialize())
+                self.reply_queue.put(rm)
 
                 # no need to keep this entry since the group is destroyed
                 del self.server.group_destroy_resource_count[guid]
@@ -1655,7 +1659,7 @@ class GroupContext:
         return
 
     @staticmethod
-    def destroy_pmix_resources(server, msg, reply_channel):
+    def destroy_pmix_resources(server, msg, reply_queue):
         target_uid, found, errmsg = server.resolve_guid(msg.user_name, msg.guid)
 
         gsgdr = dmsg.GSGroupDestroyPMIxResponse
@@ -1663,7 +1667,7 @@ class GroupContext:
         LOG.debug("Preparing gs destroy request")
         if not found:
             rm = gsgdr(tag=server.tag_inc(), ref=msg.tag, err=gsgdr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown group of resources: response to {msg}: {rm}")
             return False
         else:
@@ -1675,7 +1679,7 @@ class GroupContext:
             groupdesc.state = gds.PENDING
 
             groupctx.destroy_pmix_request = msg
-            groupctx.reply_channel = reply_channel
+            groupctx.reply_queue = reply_queue
 
             server.group_destroy_resource_count[target_uid] = []
 
@@ -1690,12 +1694,12 @@ class GroupContext:
             server.group_destroy_pmix_count[msg.guid] = 0
             for node, pctx in ls_kill_context_map.items():
                 outbound_tag = server.tag_inc()
-                shep_req = dmsg.LSDestroyPMIx(tag=outbound_tag, r_c_uid=dfacts.GS_INPUT_CUID, guid=msg.guid)
-                shep_hdl = server.shep_inputs[node]
+                ls_req = dmsg.LSDestroyPMIx(tag=outbound_tag, r_c_uid=dfacts.GS_INPUT_CUID, guid=msg.guid)
+                ls_hdl = server.ls_inputs[node]
                 server.group_destroy_pmix_count[msg.guid] += 1
-                server.pending_sends.put((shep_hdl, shep_req.serialize()))
+                server.pending_sends.put((ls_hdl, ls_req))
                 server.pending[outbound_tag] = groupctx.complete_destroy_pmix_resources
-                LOG.debug("request %s to shep %d", shep_req, node)
+                LOG.debug("request %s to ls %d", ls_req, node)
             LOG.debug("Submitted LS destruction of PMIx resources")
             return True
 
@@ -1726,7 +1730,7 @@ class GroupContext:
                     err=out_msg.Errors.SUCCESS,
                     guid=msg.guid,
                 )
-                groupctx.reply_channel.send(response.serialize())
+                groupctx.reply_queue.put(response)
                 LOG.debug(f"GSGroupDestroyPMIx response sent, tag {response.tag} ref {response.ref} pending cleared")
 
             return True

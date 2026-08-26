@@ -31,12 +31,12 @@ void read_write_erase_metadata(char * ddict_descr, int num_procs) {
     dd_manager0.pput(key, num_clients);
     assert (dd_manager0.contains(key));
     SerializableInt val = dd_manager0[key];
-    assert (val.getVal() == num_clients.getVal());
+    assert (val.val() == num_clients.val());
 
     dd_manager0.pput(key1, num_points);
     assert (dd_manager0.contains(key1));
     SerializableInt val1 = dd_manager0[key1];
-    assert (val1.getVal() == num_points.getVal());
+    assert (val1.val() == num_points.val());
 
     assert (dd_manager0.size() == 2);
 
@@ -44,7 +44,7 @@ void read_write_erase_metadata(char * ddict_descr, int num_procs) {
     auto keys = dd_manager0.keys();
     for(int i=0 ; i<keys.size() ; i++) {
         SerializableString theKey = keys[i];
-        std::string val = theKey.getVal();
+        std::string val = theKey.val();
         cout<<val<<endl;
     }
     dd_manager0.erase(key);
@@ -91,7 +91,7 @@ int main(int argc, char* argv[]) {
             for (int i=0 ; i<num_procs ; i++) {
                 SerializableInt client_id(i);
                 SerializableDouble result = aggregate_dd[client_id];
-                sum_of_avgs += result.getVal();
+                sum_of_avgs += result.val();
             }
             double prev_avg = avg;
             avg = sum_of_avgs / (double)num_procs;

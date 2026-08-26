@@ -57,7 +57,6 @@ def main(transport_test_env: bool = False):
     parser.add_argument(
         "--frontend-sdesc",
         dest="frontend_sdesc",
-        type=B64.from_str,
         help="File descriptor for communication to frontend",
     )
     parser.add_argument("--transport-test", action="store_true", help="Run in transport test mode")

@@ -20,10 +20,12 @@ import dragon.utils as dutils
 
 LOGGER = logging.getLogger("dragon.workflows.runtime")
 
+
 def get_logs(name):
     global LOGGER
     log = LOGGER.getChild(name)
     return log.debug, log.info
+
 
 _current_rt_uid = None
 already_published = {}
@@ -85,14 +87,14 @@ def get_ip():
 def get_current_inf_env():
     LOGGER.debug("Getting current infrastructure environment")
     rv = {}
-    gs_cd_key = dfacts.env_name("GS_CD")
-    gs_ret_cd_key = dfacts.env_name("GS_RET_CD")
-    ls_cd_key = dfacts.env_name("LOCAL_SHEP_CD")
-    ls_ret_cd_key = dfacts.env_name("SHEP_RET_CD")
-    rv[gs_cd_key] = os.environ[gs_cd_key]
-    rv[gs_ret_cd_key] = os.environ[gs_ret_cd_key]
-    rv[ls_cd_key] = os.environ[ls_cd_key]
-    rv[ls_ret_cd_key] = os.environ[ls_ret_cd_key]
+    gs_qd_key = dfacts.env_name("GS_QD")
+    gs_ret_qd_key = dfacts.env_name("GS_RET_QD")
+    ls_qd_key = dfacts.env_name("LOCAL_LS_QD")
+    ls_ret_qd_key = dfacts.env_name("LS_RET_QD")
+    rv[gs_qd_key] = os.environ[gs_qd_key]
+    rv[gs_ret_qd_key] = os.environ[gs_ret_qd_key]
+    rv[ls_qd_key] = os.environ[ls_qd_key]
+    rv[ls_ret_qd_key] = os.environ[ls_ret_qd_key]
     # get runtime ip addrs
     rt_uid_key = "DRAGON_RT_UID"
     rv[rt_uid_key] = os.environ[rt_uid_key]
@@ -101,14 +103,14 @@ def get_current_inf_env():
 
 def set_inf_env(env):
     LOGGER.debug("Setting infrastructure environment")
-    gs_cd_key = dfacts.env_name("GS_CD")
-    gs_ret_cd_key = dfacts.env_name("GS_RET_CD")
-    ls_cd_key = dfacts.env_name("LOCAL_SHEP_CD")
-    ls_ret_cd_key = dfacts.env_name("SHEP_RET_CD")
-    os.environ[gs_cd_key] = env[gs_cd_key]
-    os.environ[gs_ret_cd_key] = env[gs_ret_cd_key]
-    os.environ[ls_cd_key] = env[ls_cd_key]
-    os.environ[ls_ret_cd_key] = env[ls_ret_cd_key]
+    gs_qd_key = dfacts.env_name("GS_QD")
+    gs_ret_qd_key = dfacts.env_name("GS_RET_QD")
+    ls_qd_key = dfacts.env_name("LOCAL_LS_QD")
+    ls_ret_qd_key = dfacts.env_name("LS_RET_QD")
+    os.environ[gs_qd_key] = env[gs_qd_key]
+    os.environ[gs_ret_qd_key] = env[gs_ret_qd_key]
+    os.environ[ls_qd_key] = env[ls_qd_key]
+    os.environ[ls_ret_qd_key] = env[ls_ret_qd_key]
     # set runtime ip addrs
     rt_uid_key = "DRAGON_RT_UID"
     os.environ[rt_uid_key] = env[rt_uid_key]
@@ -379,19 +381,19 @@ class Proxy:
 def get_sdesc():
 
     LOGGER.debug("Getting serialized runtime descriptor")
-    gs_cd = os.environ[dfacts.env_name(dfacts.GS_CD)]
-    gs_ret_cd = os.environ[dfacts.env_name(dfacts.GS_RET_CD)]
-    ls_cd = os.environ[dfacts.env_name(dfacts.LOCAL_SHEP_CD)]
-    ls_ret_cd = os.environ[dfacts.env_name(dfacts.SHEP_RET_CD)]
+    gs_qd = os.environ[dfacts.env_name(dfacts.GS_QD)]
+    gs_ret_qd = os.environ[dfacts.env_name(dfacts.GS_RET_QD)]
+    ls_qd = os.environ[dfacts.env_name(dfacts.LOCAL_LS_QD)]
+    ls_ret_qd = os.environ[dfacts.env_name(dfacts.LS_RET_QD)]
 
     fe_ext_ip_addr = os.environ["DRAGON_FE_EXTERNAL_IP_ADDR"]
     head_node_ip_addr = os.environ["DRAGON_HEAD_NODE_IP_ADDR"]
     oob_port = dfacts.OOB_PORT
     python_path = sys.executable
     sdesc = dmsg.RuntimeDesc(
-        0, gs_cd, gs_ret_cd, ls_cd, ls_ret_cd, fe_ext_ip_addr, head_node_ip_addr, oob_port, python_path, os.environ
+        0, gs_qd, gs_ret_qd, ls_qd, ls_ret_qd, fe_ext_ip_addr, head_node_ip_addr, oob_port, python_path, os.environ
     )
-    return sdesc.serialize()
+    return dutils.b64encode(sdesc.serialize())
 
 
 def publish(name, publish_dir=None):
@@ -488,7 +490,6 @@ def lookup(system, name, timeout_in=None, publish_dir=None):
         dragon_dir = home_dir / ".dragon"
     publish_path = f"{dragon_dir}/{name}"
 
-
     while time_so_far < timeout:
         rc = os.system(f"scp {system}:{publish_path} . > /dev/null 2>&1")
         if rc == 0:
@@ -524,7 +525,7 @@ def attach(sdesc_str, oob_ssh_tunnel_override=None, remote_cwd=None):
     :rtype: Proxy
     """
     LOGGER.debug("Attaching to remote runtime with sdesc: %s", sdesc_str)
-    sdesc = dmsg.parse(sdesc_str)
+    sdesc = dmsg.parse(dutils.b64decode(sdesc_str))
 
     jump_host = sdesc.fe_ext_ip_addr
     compute_node = sdesc.head_node_ip_addr

@@ -34,6 +34,7 @@ from .parameters import this_process
 from socket import socket, AF_INET, SOCK_STREAM, SOCK_DGRAM, gethostname, inet_aton
 import struct
 from .facts import FIRST_PUID
+
 from ..utils import b64encode, b64decode
 
 
@@ -108,6 +109,9 @@ class NewlineStreamWrapper:
             # stream is closed. This means things are going away
             # anyway. So nothing to do in this case.
             pass
+
+    def put(self, data):
+        self.send(b64encode(data))
 
     def recv(self):
         """Perform the read operation on the stream. Assert that the read_intent
@@ -352,6 +356,9 @@ class AbsorbingChannel:
     def send(self, msg):
         self.msg = msg
 
+    def put(self, msg):
+        self.msg = msg
+
 
 def survey_dev_shm():
     """Looks at what is in /dev/shm owned by current user
@@ -513,7 +520,7 @@ def range_expr(
 def enable_logging(level=logging.DEBUG):
     logging.basicConfig(stream=sys.stdout, level=level)
 
-    
+
 def user_print(*args, **kwargs):
     if this_process.my_puid >= FIRST_PUID:
         kwargs["flush"] = True

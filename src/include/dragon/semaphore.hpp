@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include <dragon/channels.h>
+#include <dragon/serializable.hpp>
 
 namespace dragon {
 
@@ -35,6 +36,17 @@ class Semaphore {
      * @param serialized_sem A serialized descriptor of the semaphore object.
      */
     Semaphore(const char* serialized_sem);
+
+    /**
+     * @brief Copy constructor. The copy attaches to the same Semaphore on its own so
+     * both Semaphore objects may be used and destroyed independently.
+     */
+    Semaphore(const Semaphore& other);
+
+    /**
+     * @brief Move constructor. The attachment, if any, is transferred to the new Semaphore.
+     */
+    Semaphore(Semaphore&& other) noexcept;
 
     /**
      * @brief Destructor for a Semaphore.
@@ -95,12 +107,30 @@ class Semaphore {
     */
     const char* serialize();
 
+    /**
+     * @brief Convert this Semaphore into a Serializable so it may be sent to another process.
+     *
+     * Only the descriptor of the Semaphore is carried by the Serializable.
+     */
+    operator Serializable() const;
+
 
     private:
     bool mInternallyManaged;
     dragonChannelDescr_t mSemChannel;
     std::string mSerSemChannel;
 };
+
+inline SerializableSemaphore::SerializableSemaphore(Semaphore& semaphore):
+    mSerialized(std::string(semaphore.serialize())) {}
+
+inline Serializable::operator Semaphore() const {
+    return Semaphore(asSerializableSemaphore().val().c_str());
+}
+
+inline Semaphore::operator Serializable() const {
+    return Serializable(SerializableSemaphore(mSerSemChannel));
+}
 
 } // end dragon namespace
 

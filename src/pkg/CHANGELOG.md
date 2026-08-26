@@ -1,5 +1,37 @@
 # Changelog
 
+## [0.14.2] - 2026-08-24
+
+### Changed
+
+    [AICI-1882] - Swap in Native Queue throughout runtime and infrastructure
+    [AICI-2216] - Improve bandwidth for queue put
+    [AICI-2223] - Update version and release notes for 0.14.2
+    [AICI-2098] - Drop Python 3.10 support
+
+### Added
+
+    [AICI-2130] - Add LangGraph support to deploy agents via dragon
+    [AICI-2172] - Integrate tests_ai into automated unit tests
+    [AICI-2186] - Create a new extra requirements tag for platform/services dependencies
+    [AICI-2133] - Implement Sonarqube initial quality gate
+    [AICI-2173] - Enable Dragon multi-node dev container
+    [AICI-2175] - Extended Serializable support for C++/Python interprocess cooperation
+    [AICI-2215] - Expand aarch64 dragon builds to 3 x python versions
+
+### Fixed
+
+    [AICI-2194] - Fix memory error in frontend memory pools
+    [AICI-2167] - Address launcher issues preventing running multi-node in Docker Compose environment
+    [AICI-2177] - Dragon-cleanup single node not cleaning up child processes
+    [AICI-2178] - Updating the Dragon Docs to highlight hsta config
+    [AICI-2185] - Fix std::bad_alloc errors in GUPS batchput
+    [AICI-2221] - Fix "Unsupported workload manager specified" in multi-node launcher
+    [AICI-2222] - Don't ship pub/priv key pair in multi-node dev container
+
+
+
+
 ## [0.14.1] - 2026-07-01
 
 ### Changed

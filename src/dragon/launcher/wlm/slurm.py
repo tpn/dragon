@@ -1,12 +1,16 @@
 import os
 import shutil
+import logging
 import subprocess
 
 from .base import WLM, BaseWLM
 
 
+logger = logging.getLogger(__name__)
+
 class SlurmWLM(BaseWLM):
 
+    name = WLM.SLURM.value
     SRUN_COMMAND_LINE = "srun --nodes={nnodes} --ntasks={nnodes} --cpu_bind=none -u -l -W 0"
     ENV_SLURM_JOB_ID = "SLURM_JOB_ID"
     ENV_SLURM_NUM_NODES = "SLURM_JOB_NUM_NODES"
@@ -29,11 +33,23 @@ Resubmit as part of a 'salloc' or 'sbatch' execution."""
         self.SRUN_ARGS = self.SRUN_COMMAND_LINE.format(nnodes=nnodes).split()
 
     @classmethod
-    def check_for_wlm_support(cls) -> bool:
-        return shutil.which("srun") is not None
+    def check_for_wlm_support(cls) -> int:
+        if shutil.which("srun") is not None:
+            logger.info("Slurm was detected on the system.")
+            if cls.has_allocation():
+                logger.info("Slurm job allocation detected.")
+                return 2
+            logger.info("No Slurm job allocation detected.")
+            return 1
+        logger.info("Slurm was not detected on the system.")
+        return 0
 
     @classmethod
-    def check_for_allocation(cls) -> bool:
+    def requires_allocation(cls) -> bool:
+        return True
+
+    @classmethod
+    def has_allocation(cls) -> bool:
         return os.environ.get(cls.ENV_SLURM_JOB_ID) is not None
 
     def _get_wlm_job_id(self) -> str:

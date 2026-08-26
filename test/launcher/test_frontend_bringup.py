@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import gc
 import os
 import logging
 import random
@@ -17,7 +18,7 @@ from dragon.infrastructure import facts as dfacts
 from dragon.infrastructure import messages as dmsg
 from dragon.launcher.wlm import WLM, SlurmWLM, pbs
 from dragon.channels import ChannelError
-from dragon.managed_memory import DragonMemoryError
+from dragon.managed_memory import MemoryPool, DragonMemoryError
 from dragon.utils import B64
 from dragon.infrastructure.facts import DEFAULT_OVERLAY_NETWORK_PORT, TransportAgentOptions
 
@@ -33,6 +34,9 @@ from .frontend_testing_mocks import (
     handle_overlay_teardown,
 )
 from .frontend_testing_mocks import send_abnormal_term
+from .launcher_testing_utils import _GarbageMsg
+
+from dragon.launcher.frontend import LauncherFrontEnd
 
 
 def get_args_map(network_config, **kwargs):
@@ -60,95 +64,99 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.bad_network_config = os.path.join(self.test_dir, "slurm_bad.yaml")
 
         self.be_mpool = None
-        self.be_ch_out = None
-        self.be_ch_in = None
-        self.overlay_inout = None
-
-        self.ls_ch = None
-
-        self.ta_ch_in = None
-        self.ta_ch_out = None
-        self.fe_ta_conn = None
+        self.fe_in_q = None
+        self.be_nodes = {}
+        self.overlay_in_q = None
+        self.overlay_out_q = None
+        self.primary_be_in_q = None
 
     def tearDown(self):
 
         try:
-            if self.fe_ta_conn is not None:
-                self.fe_ta_conn.close()
-                self.fe_ta_conn = None
-        except (ConnectionError, AttributeError):
+            if self.overlay_in_q is not None:
+                self.overlay_in_q.close()
+                self.overlay_in_q = None
+        except Exception:
             pass
 
         try:
-            if self.be_ch_out is not None:
-                self.be_ch_out.detach()
-                self.be_ch_out = None
-        except (ChannelError, AttributeError):
+            if self.overlay_out_q is not None:
+                self.overlay_out_q.close()
+                self.overlay_out_q = None
+        except Exception:
+            pass
+
+        try:
+            if self.fe_in_q is not None:
+                self.fe_in_q.close()
+                self.fe_in_q = None
+        except Exception:
             pass
 
         try:
             for node in self.be_nodes.values():
-                node["conn"].close()
-                node["ch_in"].destroy()
-        except (AttributeError, ChannelError):
+                try:
+                    node["be_in_q"].close()
+                except Exception:
+                    pass
+                try:
+                    node["be_ch_in"].destroy()
+                except Exception:
+                    pass
+        except Exception:
             pass
 
         try:
             for node in self.be_nodes.values():
-                node["ls_ch"].destroy()
-                if node["is_primary"]:
-                    node["gs_ch"].destroy()
-        except (AttributeError, ChannelError, KeyError):
+                try:
+                    node["ls_ch"].destroy()
+                except Exception:
+                    pass
+                try:
+                    if node.get("gs_ch") is not None:
+                        node["gs_ch"].destroy()
+                except Exception:
+                    pass
+        except Exception:
             pass
 
-        try:
-            if self.ta_ch_out is not None:
-                self.ta_ch_out.detach()
-                self.ta_ch_out = None
-        except (AttributeError, ChannelError):
-            pass
-
-        try:
-            if self.ta_ch_in is not None:
-                self.ta_ch_in.detach()
-                self.ta_ch_in = None
-        except (AttributeError, ChannelError):
-            pass
+        # Run a full GC cycle before destroying be_mpool.  PickleReadAdapter objects
+        # from DQueue.get() calls on overlay_in_q (which uses be_mpool) may be held in
+        # reference cycles via exception __context__ chains created inside pickle.load()
+        # and queue_monitor.  If be_mpool is destroyed while those cycles are still live,
+        # CPython's cyclic GC — triggered later by an unrelated allocation or during
+        # interpreter shutdown — will call PRA.__dealloc__ → dragon_memory_free() on the
+        # already-destroyed pool, causing DRAGON_OBJECT_DESTROYED followed by SIGSEGV.
+        gc.collect()
 
         try:
             if self.be_mpool is not None:
                 self.be_mpool.destroy()
                 del self.be_mpool
                 self.be_mpool = None
-        except (AttributeError, DragonMemoryError):
+        except Exception:
             pass
 
     def do_bringup(self, mock_overlay, mock_launch):
 
         overlay, la_info = handle_bringup(mock_overlay, mock_launch, self.network_config)
-        self.ta_ch_in = overlay["ta_ch_in"]
-        self.ta_ch_out = overlay["ta_ch_out"]
-        self.fe_ta_conn = overlay["fe_ta_conn"]
+        self.overlay_in_q = overlay["overlay_in_q"]
+        self.overlay_out_q = overlay["overlay_out_q"]
         self.be_mpool = overlay["be_mpool"]
-        self.be_ch_out = overlay["be_ch_out"]
-        self.be_ch_in = overlay["be_ch_in"]
+        self.fe_in_q = overlay["fe_in_q"]
         self.be_nodes = overlay["be_nodes"]
-        self.overlay_inout = overlay["overlay_inout"]
-        self.primary_conn = overlay["primary_conn"]
+        self.primary_be_in_q = overlay["primary_be_in_q"]
 
         return la_info
 
     def get_backend_up(self, mock_overlay, mock_launch):
 
         overlay = stand_up_backend(mock_overlay, mock_launch, self.network_config)
-        self.ta_ch_in = overlay["ta_ch_in"]
-        self.ta_ch_out = overlay["ta_ch_out"]
-        self.fe_ta_conn = overlay["fe_ta_conn"]
+        self.overlay_in_q = overlay["overlay_in_q"]
+        self.overlay_out_q = overlay["overlay_out_q"]
         self.be_mpool = overlay["be_mpool"]
-        self.be_ch_out = overlay["be_ch_out"]
-        self.be_ch_in = overlay["be_ch_in"]
+        self.fe_in_q = overlay["fe_in_q"]
         self.be_nodes = overlay["be_nodes"]
-        self.overlay_inout = overlay["overlay_inout"]
 
     @patch.dict(os.environ, {SlurmWLM.ENV_SLURM_JOB_ID: "1234", SlurmWLM.ENV_SLURM_NUM_NODES: "4"})
     @patch("dragon.launcher.frontend.LauncherFrontEnd._launch_backend")
@@ -173,10 +181,10 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
             self.assertEqual(la_info.transport, TransportAgentOptions.TCP)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send GSHalted
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -205,7 +213,7 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
             self.assertEqual(la_info.transport, TransportAgentOptions.TCP)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate_error(self.primary_conn)
+        handle_gsprocesscreate_error(self.primary_be_in_q, self.fe_in_q)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -238,10 +246,10 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
             self.assertEqual(la_info.transport, TransportAgentOptions.TCP)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send GSHalted
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -266,10 +274,10 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.assertEqual(la_info.transport, TransportAgentOptions.TCP)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send GSHalted
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -291,10 +299,10 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send GSHalted
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -347,14 +355,21 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
             pass
         overlay_args = mock_overlay.call_args.kwargs
 
+        # Create be_mpool first so FLI uses be_mpool, not fe_mpool
+        self.be_mpool = MemoryPool(
+            int(dfacts.DEFAULT_BE_OVERLAY_TRANSPORT_SEG_SZ),
+            f"{os.getuid()}_{os.getpid()}_{2}" + dfacts.DEFAULT_POOL_SUFFIX,
+            dfacts.be_pool_muid_from_hostid(2),
+        )
+
         # Connect to overlay comms to talk to fronteend
-        self.ta_ch_in, self.ta_ch_out, self.fe_ta_conn = open_overlay_comms(
-            overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"]
+        self.overlay_in_q, self.overlay_out_q = open_overlay_comms(
+            overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"], mpool=self.be_mpool
         )
         # Let frontend know the overlay is "up"
-        self.fe_ta_conn.send(dmsg.OverlayPingLA(next_tag()).serialize())
+        self.overlay_out_q.put(dmsg.OverlayPingLA(next_tag()))
 
-        handle_overlay_teardown(self.fe_ta_conn)
+        handle_overlay_teardown(self.overlay_in_q, self.overlay_out_q)
 
         fe_proc.join()
 
@@ -404,55 +419,80 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         log = logging.getLogger("msg_out_of_order")
         args_map = get_args_map(self.network_config)
 
-        # get startup going in another thread. Note: need to do threads in order to use
-        # all our mocks
-        fe_proc = threading.Thread(name="Frontend Server", target=run_frontend, args=(args_map,), daemon=False)
-        fe_proc.start()
+        # Prevent double-destroy of fe_mpool and the associated SIGSEGV in
+        # PickleReadAdapter.__dealloc__.  See test_garbled_beisup for the full explanation.
+        _orig_close = LauncherFrontEnd._close_comm_overlaynet
+        _orig_close_overlay = LauncherFrontEnd._close_overlay
+        _call_count = [0]
 
-        # Get the mock's input args to the
-        while mock_overlay.call_args is None:
-            pass
-        overlay_args = mock_overlay.call_args.kwargs
+        def _close_overlay_gc(self_fe, abnormal=False):
+            _orig_close_overlay(self_fe, abnormal=abnormal)
+            gc.collect()
 
-        # Connect to overlay comms to talk to fronteend
-        self.ta_ch_in, self.ta_ch_out, self.fe_ta_conn = open_overlay_comms(
-            overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"]
-        )
+        def _close_once(self_fe, abnormal=False):
+            _call_count[0] += 1
+            if _call_count[0] == 1:
+                gc.collect()
+                with patch.object(LauncherFrontEnd, "_close_overlay", _close_overlay_gc):
+                    _orig_close(self_fe, abnormal=abnormal)
 
-        # Let frontend know the overlay is "up"
-        self.fe_ta_conn.send(dmsg.OverlayPingLA(next_tag()).serialize())
+        with patch.object(LauncherFrontEnd, "_close_comm_overlaynet", _close_once):
+            # get startup going in another thread. Note: need to do threads in order to use
+            # all our mocks
+            fe_proc = threading.Thread(name="Frontend Server", target=run_frontend, args=(args_map,), daemon=False)
+            fe_proc.start()
 
-        # Grab the frontend channel descriptor for the launched backend and
-        # send it mine
-        while mock_launch.call_args is None:
-            pass
-        launch_be_args = mock_launch.call_args.kwargs
-        log.info(f"got be args: {launch_be_args}")
+            # Get the mock's input args to the
+            while mock_overlay.call_args is None:
+                pass
+            overlay_args = mock_overlay.call_args.kwargs
 
-        # Connect to backend comms for frontend-to-backend and back comms
-        self.be_mpool, self.be_ch_out, self.be_ch_in, self.be_nodes, self.overlay_inout = open_backend_comms(
-            launch_be_args["frontend_sdesc"], self.network_config
-        )
-        log.info("got backend up")
+            # Create be_mpool first (before open_overlay_comms) so FLI uses be_mpool, not fe_mpool
+            self.be_mpool = MemoryPool(
+                int(dfacts.DEFAULT_BE_OVERLAY_TRANSPORT_SEG_SZ),
+                f"{os.getuid()}_{os.getpid()}_{2}" + dfacts.DEFAULT_POOL_SUFFIX,
+                dfacts.be_pool_muid_from_hostid(2),
+            )
 
-        # Send BEIsUp
-        send_beisup(self.be_nodes)
-        log.info("send BEIsUp messages")
+            # Connect to overlay comms to talk to fronteend
+            self.overlay_in_q, self.overlay_out_q = open_overlay_comms(
+                overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"], mpool=self.be_mpool
+            )
 
-        # Recv FENodeIdxBE
-        recv_fenodeidx(self.be_nodes)
-        log.info("got all the FENodeIdxBE messages")
+            # Let frontend know the overlay is "up"
+            self.overlay_out_q.put(dmsg.OverlayPingLA(next_tag()))
 
-        # The Dragon FrontEnd is expecting us to some SHChannelsUp messages.
-        # Instead, we're going to send a message that the FE is not expecting.
+            # Grab the frontend channel descriptor for the launched backend and
+            # send it mine
+            while mock_launch.call_args is None:
+                pass
+            launch_be_args = mock_launch.call_args.kwargs
+            log.info(f"got be args: {launch_be_args}")
 
-        # Send BEIsUp
-        send_beisup(self.be_nodes)
-        log.info("send BEIsUp messages")
+            # Connect to backend comms for frontend-to-backend and back comms
+            self.be_mpool, self.fe_in_q, self.be_nodes = open_backend_comms(
+                launch_be_args["frontend_sdesc"], self.network_config, be_mpool=self.be_mpool
+            )
+            log.info("got backend up")
 
-        handle_overlay_teardown(self.fe_ta_conn)
+            # Send BEIsUp
+            send_beisup(self.be_nodes)
+            log.info("send BEIsUp messages")
 
-        fe_proc.join()
+            # Recv FENodeIdxBE
+            recv_fenodeidx(self.be_nodes)
+            log.info("got all the FENodeIdxBE messages")
+
+            # The Dragon FrontEnd is expecting us to some SHChannelsUp messages.
+            # Instead, we're going to send a message that the FE is not expecting.
+
+            # Send BEIsUp
+            send_beisup(self.be_nodes)
+            log.info("send BEIsUp messages")
+
+            handle_overlay_teardown(self.overlay_in_q, self.overlay_out_q)
+
+            fe_proc.join()
 
         assert "Frontend Server" in exceptions_caught_in_threads  # there was an exception in thread  1
         assert exceptions_caught_in_threads["Frontend Server"]["exception"]["type"] == RuntimeError
@@ -468,8 +508,6 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         log = logging.getLogger("garbled_beisup")
         args_map = get_args_map(self.network_config)
 
-        # get startup going in another thread. Note: need to do threads in order to use
-        # all our mocks
         fe_proc = threading.Thread(name="Frontend Server", target=run_frontend, args=(args_map,), daemon=False)
         fe_proc.start()
 
@@ -478,14 +516,14 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
 
         # Send BEIsUp
         for i, (host_id, node) in enumerate(self.be_nodes.items()):
-            be_up_msg = dmsg.BEIsUp(tag=next_tag(), be_ch_desc=str(B64(node["ch_in"].serialize())), host_id=host_id)
+            be_up_msg = dmsg.BEIsUp(tag=next_tag(), be_ch_desc=node["be_in_q"].serialize(), host_id=host_id)
             if i == 1:
                 garbage_dict = {"junk": "abdecdf", "52": 20}
-                node["conn"].send(json.dumps(garbage_dict))
+                node["fe_in_q"].put(_GarbageMsg(json.dumps(garbage_dict)))
             else:
-                node["conn"].send(be_up_msg.serialize())
+                node["fe_in_q"].put(be_up_msg)
 
-        handle_overlay_teardown(self.fe_ta_conn)
+        handle_overlay_teardown(self.overlay_in_q, self.overlay_out_q)
 
         log.debug("sitting on frontend join")
         fe_proc.join()
@@ -517,14 +555,14 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
 
         # Send BEIsUp
         for i, (host_id, node) in enumerate(self.be_nodes.items()):
-            be_up_msg = dmsg.BEIsUp(tag=next_tag(), be_ch_desc=str(B64(node["ch_in"].serialize())), host_id=host_id)
+            be_up_msg = dmsg.BEIsUp(tag=next_tag(), be_ch_desc=node["be_in_q"].serialize(), host_id=host_id)
             if i == 1:
                 garbage_dict = {"junk": "abdecdf", "52": 20}
-                node["conn"].send(json.dumps(garbage_dict))
+                node["fe_in_q"].put(dmsg.OverlayPingLA(next_tag()))
             else:
-                node["conn"].send(be_up_msg.serialize())
+                node["fe_in_q"].put(be_up_msg)
 
-        handle_overlay_teardown(self.fe_ta_conn)
+        handle_overlay_teardown(self.overlay_in_q, self.overlay_out_q)
         log.debug("sitting on frontend join")
         fe_proc.join()
 
@@ -537,57 +575,90 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
 
     @catch_thread_exceptions
     @patch.dict(os.environ, {SlurmWLM.ENV_SLURM_JOB_ID: "1234", SlurmWLM.ENV_SLURM_NUM_NODES: "4"})
+    @patch("dragon.launcher.frontend.LauncherFrontEnd._kill_backend")
+    @patch("dragon.launcher.frontend.LauncherFrontEnd._wait_on_wlm_proc_exit")
     @patch("dragon.launcher.frontend.LauncherFrontEnd._launch_backend")
     @patch("dragon.launcher.frontend.start_overlay_network")
-    def test_garbled_taup(self, exceptions_caught_in_threads, mock_overlay, mock_launch):
+    def test_garbled_taup(self, exceptions_caught_in_threads, mock_overlay, mock_launch, mock_wait, mock_kill):
         """Test receiving garbage TAUp in middle of loop"""
+        mock_wait.side_effect = TimeoutExpired("", 0, "raising a fake timeout")
 
         log = logging.getLogger("garbled_taup")
         args_map = get_args_map(self.network_config)
 
-        # get startup going in another thread. Note: need to do threads in order to use
-        # all our mocks
-        fe_proc = threading.Thread(name="Frontend Server", target=run_frontend, args=(args_map,), daemon=False)
-        fe_proc.start()
+        # Prevent double-destroy of fe_mpool: _cleanup calls _close_comm_overlaynet both
+        # inside _cleanup_abnormal_state and then again directly.  The first call destroys
+        # fe_mpool; the second call causes DRAGON_OBJECT_DESTROYED in PickleReadAdapter.__dealloc__
+        # because FLI handles still reference the freed pool.  A one-shot guard ensures the
+        # real cleanup runs exactly once.
+        #
+        # Additionally, PickleReadAdapter objects may enter reference cycles during
+        # _close_overlay (via exception __context__ chains in q_get_with_timeout).
+        # CPython's cyclic GC then collects them during the *next* Dragon allocation,
+        # which may happen after fe_mpool.destroy(), causing DRAGON_OBJECT_DESTROYED in
+        # PRA.__dealloc__ followed by SIGSEGV in dragon_fli_recv_mem().  Patching
+        # _close_overlay to run gc.collect() after it returns breaks those cycles
+        # while the pool is still valid, before _close_comm_overlaynet destroys it.
+        _orig_close = LauncherFrontEnd._close_comm_overlaynet
+        _orig_close_overlay = LauncherFrontEnd._close_overlay
+        _call_count = [0]
 
-        self.get_backend_up(mock_overlay, mock_launch)
-        log.info("got backend up")
+        def _close_overlay_gc(self_fe, abnormal=False):
+            _orig_close_overlay(self_fe, abnormal=abnormal)
+            gc.collect()
 
-        # Send BEIsUp
-        send_beisup(self.be_nodes)
-        log.info("send BEIsUp messages")
+        def _close_once(self_fe, abnormal=False):
+            _call_count[0] += 1
+            if _call_count[0] == 1:
+                gc.collect()
+                with patch.object(LauncherFrontEnd, "_close_overlay", _close_overlay_gc):
+                    _orig_close(self_fe, abnormal=abnormal)
 
-        # Recv FENodeIdxBE
-        self.primary_conn = recv_fenodeidx(self.be_nodes)
-        log.info("got all the FENodeIdxBE messages")
+        with patch.object(LauncherFrontEnd, "_close_comm_overlaynet", _close_once):
+            # get startup going in another thread. Note: need to do threads in order to use
+            # all our mocks
+            fe_proc = threading.Thread(name="Frontend Server", target=run_frontend, args=(args_map,), daemon=False)
+            fe_proc.start()
 
-        # Fudge some SHChannelsUp messages
-        send_shchannelsup(self.be_nodes, self.be_mpool)
-        log.info(
-            f'sent shchannelsup: {[node["gs_ch"].serialize() for node in self.be_nodes.values() if node["gs_ch"] is not None]}'
-        )
+            self.get_backend_up(mock_overlay, mock_launch)
+            log.info("got backend up")
 
-        # Receive LAChannelsInfo
-        recv_lachannelsinfo(self.be_nodes)
-        log.info("la_be received LAChannelsInfo")
+            # Send BEIsUp
+            send_beisup(self.be_nodes)
+            log.info("send BEIsUp messages")
 
-        # Send TAUp
-        for i, (host_id, node) in enumerate(self.be_nodes.items()):
-            if i == 2:
-                garbage_msg = {"fizz": "abdecdf", "buzz": 20}
-                node["conn"].send(json.dumps(garbage_msg))
-            else:
-                ta_up = dmsg.TAUp(tag=next_tag(), idx=node["node_index"])
-                node["conn"].send(ta_up.serialize())
+            # Recv FENodeIdxBE
+            self.primary_be_in_q = recv_fenodeidx(self.be_nodes)
+            log.info("got all the FENodeIdxBE messages")
 
-        handle_overlay_teardown(self.fe_ta_conn)
+            # Fudge some SHChannelsUp messages
+            send_shchannelsup(self.be_nodes, self.be_mpool)
+            log.info(
+                f'sent shchannelsup: {[node["gs_ch"].serialize() for node in self.be_nodes.values() if node["gs_ch"] is not None]}'
+            )
 
-        log.debug("sitting on frontend join")
-        fe_proc.join()
+            # Receive LAChannelsInfo
+            recv_lachannelsinfo(self.be_nodes)
+            log.info("la_be received LAChannelsInfo")
+
+            # Send TAUp
+            for i, (host_id, node) in enumerate(self.be_nodes.items()):
+                if i == 2:
+                    node["fe_in_q"].put(dmsg.OverlayPingLA(next_tag()))
+                else:
+                    ta_up = dmsg.TAUp(tag=next_tag(), idx=node["node_index"])
+                    node["fe_in_q"].put(ta_up)
+
+            handle_overlay_teardown(self.overlay_in_q, self.overlay_out_q)
+
+            log.debug("sitting on frontend join")
+            fe_proc.join()
 
         assert "Frontend Server" in exceptions_caught_in_threads  # there was an exception in thread  1
         assert exceptions_caught_in_threads["Frontend Server"]["exception"]["type"] == RuntimeError
         assert str(exceptions_caught_in_threads["Frontend Server"]["exception"]["value"]) == "Abnormal exit detected"
+        mock_wait.assert_called_once()
+        mock_kill.assert_called_once()
 
     @catch_thread_exceptions
     @patch.dict(os.environ, {SlurmWLM.ENV_SLURM_JOB_ID: "1234", SlurmWLM.ENV_SLURM_NUM_NODES: "4"})
@@ -607,17 +678,15 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send an abormal termination rather than proceeding with teardown
         for i, (host_id, node) in enumerate(self.be_nodes.items()):
             if i == 2:
-                send_abnormal_term(node["conn"])
+                send_abnormal_term(self.fe_in_q)
 
         # Proceed with teardown
-        handle_teardown(
-            self.be_nodes, self.primary_conn, self.fe_ta_conn, gs_head_exit=False, abnormal_termination=True
-        )
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q, gs_head_exit=False, abnormal_termination=True)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -644,15 +713,15 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send an abormal termination rather than proceeding with teardown
         for i, (host_id, node) in enumerate(self.be_nodes.items()):
             if i == 2:
-                send_abnormal_term(node["conn"])
+                send_abnormal_term(self.fe_in_q)
 
         # Proceed with teardown
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn, gs_head_exit=False, timeout_backend=True)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q, gs_head_exit=False, timeout_backend=True)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -679,22 +748,15 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send an abormal termination rather than proceeding with teardown
         for i, (host_id, node) in enumerate(self.be_nodes.items()):
             if i == 2:
-                send_abnormal_term(node["conn"])
+                send_abnormal_term(self.fe_in_q)
 
         # Proceed with teardown
-        handle_teardown(
-            self.be_nodes,
-            self.primary_conn,
-            self.fe_ta_conn,
-            gs_head_exit=False,
-            timeout_overlay=True,
-            abnormal_termination=True,
-        )
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q, gs_head_exit=False, timeout_overlay=True, abnormal_termination=True)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -721,9 +783,9 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn, gs_head_exit=True, abort_shteardown=3)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q, gs_head_exit=True, abort_shteardown=3)
 
         fe_proc.join()
 
@@ -760,10 +822,10 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send GSHalted
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q)
 
         # Join on the frontend thread
         fe_proc.join()
@@ -821,7 +883,7 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         log.error(f"exception: {exceptions_caught_in_threads}")
         assert "Frontend Server" in exceptions_caught_in_threads  # there was an exception in thread  1
         assert exceptions_caught_in_threads["Frontend Server"]["exception"]["type"] == RuntimeError
-        assert "DRun was the only supported launcher found." in str(
+        assert "Unsupported workload manager specified" in str(
             exceptions_caught_in_threads["Frontend Server"]["exception"]["value"]
         )
 
@@ -857,10 +919,10 @@ class FrontendBringUpTeardownTest(unittest.TestCase):
         self.do_bringup(mock_overlay, mock_launch)
 
         # Receive GSProcessCreate
-        handle_gsprocesscreate(self.primary_conn)
+        handle_gsprocesscreate(self.primary_be_in_q, self.fe_in_q)
 
         # Send GSHalted
-        handle_teardown(self.be_nodes, self.primary_conn, self.fe_ta_conn)
+        handle_teardown(self.be_nodes, self.primary_be_in_q, self.fe_in_q, self.overlay_in_q, self.overlay_out_q)
 
         # Join on the frontend thread
         fe_proc.join()

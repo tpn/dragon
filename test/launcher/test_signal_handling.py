@@ -18,99 +18,33 @@ from dragon.infrastructure import facts as dfacts
 from dragon.infrastructure import messages as dmsg
 import dragon.utils as du
 
-from dragon.managed_memory import DragonPoolError, DragonMemoryError
+from dragon.managed_memory import MemoryPool, DragonPoolError, DragonMemoryError
 from dragon.channels import Channel, ChannelError
 from dragon.utils import set_host_id, B64
 from dragon.dlogging.util import setup_FE_logging
 
-from .frontend_testing_mocks import open_overlay_comms, open_backend_comms
+from .frontend_testing_mocks import (
+    open_overlay_comms,
+    open_backend_comms,
+    send_beisup,
+    recv_fenodeidx,
+    send_shchannelsup,
+    recv_lachannelsinfo,
+    send_taup,
+    handle_overlay_teardown,
+)
 
 
-def send_beisup(nodes):
-    """Send valid beisup messages"""
-
-    for host_id, node in nodes.items():
-        be_up_msg = dmsg.BEIsUp(tag=next_tag(), be_ch_desc=B64.bytes_to_str(node["ch_in"].serialize()), host_id=host_id)
-        node["conn"].send(be_up_msg.serialize())
-
-
-def recv_fenodeidx(nodes):
-    """recv FENoe4deIdxBE and finish filling out node dictionary"""
-    log = logging.getLogger("recv_fe_nodeidx")
-    for node in nodes.values():
-        fe_node_idx_msg = dmsg.parse(node["conn"].recv())
-        assert isinstance(fe_node_idx_msg, dmsg.FENodeIdxBE), "la_be node_index from fe expected"
-
-        log.info(f"got FENodeIdxBE for index {fe_node_idx_msg.node_index}")
-        node["node_index"] = fe_node_idx_msg.node_index
-        if node["node_index"] < 0:
-            raise RuntimeError("frontend giving bad node indices")
-        node["is_primary"] = node["node_index"] == 0
-        if node["is_primary"]:
-            primary_conn = node["conn"]
-        log.info(f"constructed be node: {node}")
-
-    return primary_conn
-
-
-def send_shchannelsup(nodes, mpool):
-
-    log = logging.getLogger("send_shchannelsup")
-    for host_id, node in nodes.items():
-        ls_cuid = dfacts.shepherd_cuid_from_index(node["node_index"])
-        ls_ch = Channel(mpool, ls_cuid)
-        node["ls_ch"] = ls_ch
-
-        if node["is_primary"]:
-            node["gs_ch"] = Channel(mpool, dfacts.GS_INPUT_CUID)
-            gs_cd = du.B64.bytes_to_str(node["gs_ch"].serialize())
-        else:
-            node["gs_ch"] = None
-            gs_cd = None
-
-        node_desc = NodeDescriptor(
-            host_name=node["hostname"],
-            host_id=host_id,
-            ip_addrs=node["ip_addrs"],
-            shep_cd=B64.bytes_to_str(node["ls_ch"].serialize()),
-        )
-        ch_up_msg = dmsg.SHChannelsUp(
-            tag=next_tag(), node_desc=node_desc, gs_cd=gs_cd, idx=node["node_index"], net_conf_key=node["net_conf_key"]
-        )
-        log.info(f"construct SHChannelsUp: {ch_up_msg}")
-        node["conn"].send(ch_up_msg.serialize())
-        log.info(f'sent SHChannelsUp for {node["node_index"]}')
-
-    log.info("sent all SHChannelsUp")
-
-
-def recv_lachannelsinfo(nodes):
-    """Loop to recv all LAChannelsInfo messages in frontend bcast"""
-    for host_id, node in nodes.items():
-        la_channels_info_msg = dmsg.parse(node["conn"].recv())
-        assert isinstance(la_channels_info_msg, dmsg.LAChannelsInfo), "la_be expected all ls channels info from la_fe"
-
-
-def send_taup(nodes):
-    for host_id, node in nodes.items():
-        ta_up = dmsg.TAUp(tag=next_tag(), idx=node["node_index"])
-        node["conn"].send(ta_up.serialize())
-
-
-def handle_gsprocesscreate(primary_conn, proc_create):
-    """Manage a valid response to GSProcessCreate"""
-
-    # Send response
+def handle_gsprocesscreate(fe_in_q, proc_create):
+    """Send GSProcessCreate response and head exit."""
     gs_desc = ProcessDescriptor(
         p_uid=5000, name=proc_create.user_name, node=0, p_p_uid=proc_create.p_uid  # Just a dummy value
     )
     response = dmsg.GSProcessCreateResponse(
         tag=next_tag(), ref=proc_create.tag, err=dmsg.GSProcessCreateResponse.Errors.SUCCESS, desc=gs_desc
     )
-    primary_conn.send(response.serialize())
-
-    # And go ahead and immediately exit because we're not actually doing anything
-    primary_conn.send(dmsg.GSHeadExit(exit_code=0, tag=next_tag()).serialize())
+    fe_in_q.put(response)
+    fe_in_q.put(dmsg.GSHeadExit(exit_code=0, tag=next_tag()))
 
 
 def get_args_map(network_config, from_wlm=False):
@@ -123,56 +57,40 @@ def get_args_map(network_config, from_wlm=False):
     return args_map
 
 
-def cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool):
+def cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool):
+    for q in [overlay_in_q, overlay_out_q, fe_in_q]:
+        try:
+            if q is not None:
+                q.close()
+        except Exception:
+            pass
 
     try:
-        fe_ta_conn.close()
-    except (AttributeError, ChannelError, ConnectionError):
-        pass
-
-    try:
-        be_ch_out.detach()
-    except (AttributeError, ChannelError):
-        pass
-
-    try:
-        for node in be_nodes.values():
+        for node in (be_nodes or {}).values():
             try:
-                node["conn"].close()
-            except (KeyError, AttributeError, ConnectionError):
+                node["be_in_q"].close()
+            except Exception:
                 pass
-
             try:
-                node["ch_in"].destroy()
-            except (KeyError, AttributeError, ChannelError):
+                node["be_ch_in"].destroy()
+            except Exception:
                 pass
-    except AttributeError:
-        pass
-
-    try:
-        for node in be_nodes.values():
             try:
                 node["ls_ch"].destroy()
-                if node["is_primary"]:
-                    node["gs_ch"].destroy()
-            except (KeyError, AttributeError, ChannelError):
+            except Exception:
                 pass
-    except AttributeError:
+            try:
+                if node.get("gs_ch") is not None:
+                    node["gs_ch"].destroy()
+            except Exception:
+                pass
+    except Exception:
         pass
 
     try:
-        ta_ch_out.detach()
-    except (AttributeError, ChannelError):
-        pass
-
-    try:
-        ta_ch_in.detach()
-    except (AttributeError, ChannelError):
-        pass
-
-    try:
-        be_mpool.destroy()
-    except (AttributeError, DragonMemoryError, DragonPoolError):
+        if be_mpool is not None:
+            be_mpool.destroy()
+    except Exception:
         pass
 
 
@@ -187,44 +105,44 @@ def run_frontend_supporting_mocks(
     exit_at_fenodeidx=False,
     exit_queue=None,
 ):
-
     log = logging.getLogger("frontend mocks")
 
     be_mpool = None
-    be_ch_out = None
-    be_ch_in = None
-    overlay_inout = None
-
-    ls_ch = None
-
-    ta_ch_in = None
-    ta_ch_out = None
-    fe_ta_conn = None
+    fe_in_q = None
     be_nodes = None
+    overlay_in_q = None
+    overlay_out_q = None
+    primary_be_in_q = None
 
     log.info("inside frontend mocks")
-    # Get the mock's input args to the
     try:
-
         while mock_overlay.call_args is None:
             pass
         log.info("getting mock overlay args")
         overlay_args = mock_overlay.call_args.kwargs
 
-        # Connect to overlay comms to talk to fronteend
-        log.info("opening overlay comms overlay args")
-        ta_ch_in, ta_ch_out, fe_ta_conn = open_overlay_comms(overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"])
+        # Create be_mpool first so FLI uses be_mpool, not fe_mpool
+        be_mpool = MemoryPool(
+            int(dfacts.DEFAULT_BE_OVERLAY_TRANSPORT_SEG_SZ),
+            f"{os.getuid()}_{os.getpid()}_{2}" + dfacts.DEFAULT_POOL_SUFFIX,
+            dfacts.be_pool_muid_from_hostid(2),
+        )
+
+        # Connect to overlay comms to talk to frontend
+        log.info("opening overlay comms")
+        overlay_in_q, overlay_out_q = open_overlay_comms(
+            overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"], mpool=be_mpool
+        )
 
         # Let frontend know the overlay is "up"
-        log.info("sending tapingsh")
-        fe_ta_conn.send(dmsg.OverlayPingLA(next_tag()).serialize())
+        log.info("sending OverlayPingLA")
+        overlay_out_q.put(dmsg.OverlayPingLA(next_tag()))
 
         if overlay_only:
-            halt_on = dmsg.parse(fe_ta_conn.recv())
+            halt_on = overlay_in_q.get(timeout=10.0)
             assert isinstance(halt_on, dmsg.LAHaltOverlay)
-            fe_ta_conn.send(dmsg.OverlayHalted(tag=next_tag()).serialize())
-
-            raise Exception("exiting due to return_after_overlay_up being True")
+            overlay_out_q.put(dmsg.OverlayHalted(tag=next_tag()))
+            raise RuntimeError("exiting due to overlay_only being True")
 
         # Grab the frontend channel descriptor for the launched backend and
         # send it mine
@@ -236,9 +154,9 @@ def run_frontend_supporting_mocks(
         mock_launch.wait.return_value = None
         log.info("set srun launch wait to None")
 
-        # Connect to backend comms for frontend-to-backend and back comms
-        be_mpool, be_ch_out, be_ch_in, be_nodes, overlay_inout = open_backend_comms(
-            launch_be_args["frontend_sdesc"], args_map["network_config"]
+        # Connect to backend comms; pass already-created be_mpool
+        be_mpool, fe_in_q, be_nodes = open_backend_comms(
+            launch_be_args["frontend_sdesc"], args_map["network_config"], be_mpool=be_mpool
         )
         log.info("got backend up")
 
@@ -248,18 +166,16 @@ def run_frontend_supporting_mocks(
 
         # Recv FENodeIdxBE
         if not exit_at_fenodeidx:
-            primary_conn = recv_fenodeidx(be_nodes)
+            primary_be_in_q = recv_fenodeidx(be_nodes)
             log.info("got all the FENodeIdxBE messages")
         else:
             log.info("told to return at FENodeIdx recv")
-            cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool)
+            cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool)
             return
 
-        # Fudge some SHChannelsUp messages
+        # Send LSChannelsUp messages
         send_shchannelsup(be_nodes, be_mpool)
-        log.info(
-            f'sent shchannelsup: {[node["gs_ch"].serialize() for node in be_nodes.values() if node["gs_ch"] is not None]}'
-        )
+        log.info("sent shchannelsup")
 
         # Receive LAChannelsInfo
         recv_lachannelsinfo(be_nodes)
@@ -270,15 +186,15 @@ def run_frontend_supporting_mocks(
         log.info("sent TAUp messages")
 
         # Send gs is up from primary
-        primary_conn.send(dmsg.GSIsUp(tag=next_tag()).serialize())
+        fe_in_q.put(dmsg.GSIsUp(tag=next_tag()))
         log.info("send GSIsUp")
 
         while True:
             gs_msg = None
             try:
                 log.debug("doing gs get")
-                gs_msg = get_with_timeout(primary_conn, timeout=0.01)
-            except TimeoutError:
+                gs_msg = primary_be_in_q.get(timeout=0.01)
+            except Exception:
                 log.debug("gs timeout")
                 pass
 
@@ -286,7 +202,7 @@ def run_frontend_supporting_mocks(
                 log.debug("doing exit get")
                 _ = get_with_timeout(exit_queue, timeout=0.01)
                 log.debug("cleaning up mocks")
-                cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool)
+                cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool)
                 return
             except TimeoutError:
                 log.debug("exit timeout")
@@ -294,52 +210,48 @@ def run_frontend_supporting_mocks(
 
             if isinstance(gs_msg, dmsg.GSProcessCreate):
                 log.info("handling GSProcessCreate on la_be")
-                handle_gsprocesscreate(primary_conn, gs_msg)
+                handle_gsprocesscreate(fe_in_q, gs_msg)
             elif isinstance(gs_msg, dmsg.GSTeardown):
                 log.info("la_be received GSTeardown")
-                primary_conn.send(dmsg.GSHalted(tag=next_tag()).serialize())
+                fe_in_q.put(dmsg.GSHalted(tag=next_tag()))
                 break
 
         nhalted = 0
         goal_halted = len(be_nodes)
         while True:
-
             for node in be_nodes.values():
                 lmsg = None
                 log.debug("posting mock recv")
                 try:
-                    lmsg = get_with_timeout(node["conn"], timeout=0.01)
-                except TimeoutError:
+                    lmsg = node["be_in_q"].get(timeout=0.01)
+                except Exception:
                     pass
 
                 try:
                     _ = get_with_timeout(exit_queue, timeout=0.01)
-                    cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool)
+                    cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool)
                     return
                 except TimeoutError:
                     pass
 
-                if isinstance(lmsg, dmsg.SHHaltTA):
-                    log.info("recvd SHHaltTA")
-                    node["conn"].send(dmsg.TAHalted(tag=next_tag()).serialize())
-                elif isinstance(lmsg, dmsg.SHTeardown):
-                    log.info("recvd SHTeardown")
+                if isinstance(lmsg, dmsg.LSHaltTA):
+                    log.info("recvd LSHaltTA")
+                    node["fe_in_q"].put(dmsg.TAHalted(tag=next_tag()))
+                elif isinstance(lmsg, dmsg.LSTeardown):
+                    log.info("recvd LSTeardown")
                     if hang_backend:
-                        # Wait to tear everything down until I know I won't make everything go
-                        # crazy
                         log.debug("waiting on exit queue signal")
                         while True:
-                            log.debug("posting exit queue recv")
                             la_exit = exit_queue.recv(timeout=1)
                             if la_exit is not None:
                                 break
                         log.debug("exit queue signal received")
-                        cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool)
+                        cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool)
                         mock_launch.wait.return_value = 2
                         log.debug("returning early from mocks")
                         return
                     else:
-                        node["conn"].send(dmsg.SHHaltBE(tag=next_tag()).serialize())
+                        node["fe_in_q"].put(dmsg.LSHaltBE(tag=next_tag()))
 
                 elif isinstance(lmsg, dmsg.BEHalted):
                     log.info("recvd BEHalted")
@@ -356,20 +268,18 @@ def run_frontend_supporting_mocks(
 
         # Handle the final TAHalted for overlay
         log.info("posting recv for FE overlay")
-        halt_on = dmsg.parse(fe_ta_conn.recv())
-        assert isinstance(halt_on, dmsg.LAHaltOverlay), "was excpecting an SHHaltTA"
+        halt_on = overlay_in_q.get(timeout=10.0)
+        assert isinstance(halt_on, dmsg.LAHaltOverlay), "was expecting an LAHaltOverlay"
         if hang_overlay:
-            # Wait to tear everything down until I know I won't make everything go
-            # crazy
             log.debug("waiting on exit queue signal")
             _ = exit_queue.recv()
             log.debug("exit queue signal received")
-            cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool)
+            cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool)
             mock_launch.wait.return_value = 2
             log.debug("breaking out of mocks before halting overlay")
             return
         else:
-            fe_ta_conn.send(dmsg.OverlayHalted(tag=next_tag()).serialize())
+            overlay_out_q.put(dmsg.OverlayHalted(tag=next_tag()))
     except Exception as e:
         log.info(f"hit frontend mocks exception: {e}")
         pass
@@ -377,7 +287,7 @@ def run_frontend_supporting_mocks(
         if mock_launch is not None:
             mock_launch.wait.return_value = None
 
-    cleanup_mocks(fe_ta_conn, be_ch_out, be_ch_in, be_nodes, ls_ch, ta_ch_out, ta_ch_in, be_mpool)
+    cleanup_mocks(overlay_in_q, overlay_out_q, fe_in_q, be_nodes, be_mpool)
 
     # Let the test know we're done:
     if mock_launch is not None:
@@ -394,15 +304,11 @@ class SigIntTest(unittest.TestCase):
         self.network_config = os.path.join(self.test_dir, "slurm_primary.yaml")
 
         self.be_mpool = None
-        self.be_ch_out = None
-        self.be_ch_in = None
-        self.overlay_inout = None
-
-        self.ls_ch = None
-
-        self.ta_ch_in = None
-        self.ta_ch_out = None
-        self.fe_ta_conn = None
+        self.fe_in_q = None
+        self.be_nodes = {}
+        self.overlay_in_q = None
+        self.overlay_out_q = None
+        self.primary_be_in_q = None
 
         self.args_map = get_args_map(self.network_config, from_wlm=False)
         self.wlm_args_map = get_args_map(self.network_config, from_wlm=True)
@@ -429,32 +335,44 @@ class SigIntTest(unittest.TestCase):
 
     def tearDown(self):
 
-        if self.fe_ta_conn is not None:
-            self.fe_ta_conn.close()
+        for q_attr in ["overlay_in_q", "overlay_out_q", "fe_in_q"]:
+            try:
+                q = getattr(self, q_attr, None)
+                if q is not None:
+                    q.close()
+                    setattr(self, q_attr, None)
+            except Exception:
+                pass
 
-        if self.be_ch_out is not None:
-            self.be_ch_out.detach()
+        try:
+            for node in (self.be_nodes or {}).values():
+                try:
+                    node["be_in_q"].close()
+                except Exception:
+                    pass
+                try:
+                    node["be_ch_in"].destroy()
+                except Exception:
+                    pass
+                try:
+                    node["ls_ch"].destroy()
+                except Exception:
+                    pass
+                try:
+                    if node.get("gs_ch") is not None:
+                        node["gs_ch"].destroy()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
-        if self.be_ch_in is not None:
-            for node in self.be_nodes.values():
-                node["conn"].close()
-                node["ch_in"].destroy()
-
-        if self.ls_ch is not None:
-            for node in self.be_nodes.values():
-                node["ls_ch"].destroy()
-
-                if node["is_primary"]:
-                    node["gs_ch"].destroy()
-
-        if self.ta_ch_out is not None:
-            self.ta_ch_out.detach()
-
-        if self.ta_ch_in is not None:
-            self.ta_ch_in.detach()
-
-        if self.be_mpool is not None:
-            self.be_mpool.destroy()
+        try:
+            if self.be_mpool is not None:
+                self.be_mpool.destroy()
+                del self.be_mpool
+                self.be_mpool = None
+        except Exception:
+            pass
 
     @patch.dict(os.environ, {SlurmWLM.ENV_SLURM_JOB_ID: "1234", SlurmWLM.ENV_SLURM_NUM_NODES: "4"})
     @patch("dragon.launcher.frontend.LauncherFrontEnd._launch_backend")

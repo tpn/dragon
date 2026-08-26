@@ -85,7 +85,7 @@ INCLUDE = $(DRAGON_INCLUDE)
 PYTHON = $(shell which python3 | awk '{if ($$1 == "") { print "python" } else { print "python3"}}')
 DEF_NODES =
 
-DRAGON_CPP_TEST_COMMON_DEPS = $(wildcard ../../src/include/dragon/*.hpp ../../src/include/dragon/*.h) ../../src/lib/libdragon.so
+DRAGON_CPP_TEST_COMMON_DEPS = $(wildcard ../../src/include/dragon/*.hpp ../../src/include/dragon/*.h ../../src/lib/libdragon.so)
 
 
 SOURCES := $(wildcard *.c)

@@ -527,7 +527,11 @@ class TestDragonContextWait(unittest.TestCase):
         start = time.monotonic()
         t.join()
         end = time.monotonic()
-        self.assertTrue(end - start < 1.5 * timeout)
+        self.assertLess(
+            end - start,
+            1.5 * timeout,
+            f"{end - start=} and {timeout=}, so timeout was not respected. {(end - start)/timeout=}",
+        )
 
         # check that waiting on the same objects a second time with a shorter timout works
         t0 = threading.Thread(

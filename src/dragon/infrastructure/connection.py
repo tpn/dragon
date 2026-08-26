@@ -394,7 +394,7 @@ class Connection:
             done_ev.set()  # if not set here, timed out.
 
     def close(self):
-        """Send an end-of-transmission and detach from channel resources. Channels are ref-counted and automatically
+        """Send an end-of-text and detach from channel resources. Channels are ref-counted and automatically
         cleaned up once all processes detach.
         """
         if self.state == self.State.CLOSED:

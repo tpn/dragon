@@ -11,11 +11,9 @@ import dragon.infrastructure.facts as dfacts
 import dragon.infrastructure.messages as dmsg
 import dragon.infrastructure.parameters as dp
 import dragon.utils as du
-import dragon.infrastructure.connection as dconn
 
 _DEBUG_OUT = None  # once initialized, attached dch.Channel
 _DEBUG_IN = None
-_LOCAL_BE = None
 _LOCAL_BE_CONN = None
 
 _BREAKPOINT_FH = None
@@ -40,14 +38,13 @@ def _cleanup_debug_channels():
     out_adapter = DbgAdapter(_DEBUG_OUT)
     out_adapter.write(f"### debug exit for: {dp.this_process.my_puid} on {dp.this_process.index}\n\n")
     _DEBUG_OUT.detach()
-    _LOCAL_BE.detach()
+    _LOCAL_BE_CONN.close()
     _DEBUG_IN.destroy()
 
 
 def _connect_debug_channels():
     global _DEBUG_OUT
     global _DEBUG_IN
-    global _LOCAL_BE
     global _LOCAL_BE_CONN
 
     inf_pool_descr = du.B64.str_to_bytes(dp.this_process.inf_pd)
@@ -61,9 +58,10 @@ def _connect_debug_channels():
     _DEBUG_OUT = dch.Channel(mem_pool=inf_pool, c_uid=dbg_out_cuid)
     _DEBUG_IN = dch.Channel(mem_pool=inf_pool, c_uid=dbg_in_cuid)
 
+    from dragon.infrastructure.queue import InfraQueue
+
     be_ch_descr = du.B64.str_to_bytes(dp.this_process.local_be_cd)
-    _LOCAL_BE = dch.Channel.attach(be_ch_descr)
-    _LOCAL_BE_CONN = dconn.Connection(outbound_initializer=_LOCAL_BE)
+    _LOCAL_BE_CONN = InfraQueue.attach(be_ch_descr)
 
     atexit.register(_cleanup_debug_channels)
 
@@ -118,7 +116,7 @@ def _get_bk_msg():
 def dragon_debug_hook():
     bk_msg = _get_bk_msg()
 
-    _LOCAL_BE_CONN.send(bk_msg.serialize())
+    _LOCAL_BE_CONN.put(bk_msg)
     out_adapter = DbgAdapter(_DEBUG_OUT)
     out_adapter.write(f"### breakpoint: p_uid {dp.this_process.my_puid} on node {dp.this_process.index}")
     pdb.Pdb(stdin=DbgAdapter(_DEBUG_IN), stdout=out_adapter, skip=[f"{__name__}*"]).set_trace()
@@ -127,7 +125,7 @@ def dragon_debug_hook():
 def dragon_exception_hook(ex_type, ex_obj, ex_tb):
     bk_msg = _get_bk_msg()
 
-    _LOCAL_BE_CONN.send(bk_msg.serialize())
+    _LOCAL_BE_CONN.put(bk_msg)
     out_adapter = DbgAdapter(_DEBUG_OUT)
     out_adapter.write(
         f"### breakpoint: uncaught exception {ex_type!s} "

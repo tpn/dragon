@@ -33,9 +33,9 @@ dragonError_t test_attach_with_pool(const char * queue_ser) {
     q.put(x);
     q.put(x);
     SerializableInt y = q.get();
-    assert(y.getVal() == x.getVal());
+    assert(y.val() == x.val());
     y = q.get();
-    assert(y.getVal() == x.getVal());
+    assert(y.val() == x.val());
 
     // destroy the pool
     err = dragon_memory_pool_destroy(&pool);
@@ -58,7 +58,7 @@ dragonError_t test_single_put(const char * queue_ser) {
     SerializableInt x(25);
     q.put(x);
     SerializableInt y = q.get();
-    assert(y.getVal() == x.getVal());
+    assert(y.val() == x.val());
     return DRAGON_SUCCESS;
 }
 
@@ -72,7 +72,7 @@ dragonError_t test_multiple_puts(const char * queue_ser) {
     }
     for (size_t i=0 ; i<num_val ; i++) {
         SerializableInt y = q.get();
-        assert(y.getVal() == x[i]->getVal());
+        assert(y.val() == x[i]->val());
         delete x[i];
     }
     delete[] x;
@@ -144,7 +144,7 @@ dragonError_t test_poll(const char * queue_ser){
     assert(res);
     // remove the value and poll
     SerializableInt y = q.get();
-    assert(y.getVal() == x.getVal());
+    assert(y.val() == x.val());
     res = q.poll(&TIMEOUT);
     assert(!res);
     return DRAGON_SUCCESS;
@@ -176,7 +176,7 @@ dragonError_t test_put_with_arg(const char * queue_ser) {
     uint64_t recv_arg = 0;
     SerializableInt y = q.get(nullptr, nullptr, &recv_arg, &TIMEOUT);
     assert(arg == recv_arg);
-    assert(x.getVal() == y.getVal());
+    assert(x.val() == y.val());
     return DRAGON_SUCCESS;
 }
 
@@ -266,7 +266,7 @@ dragonError_t test_custom_matrix_pickler_dump(const char * queue_ser) {
     Queue<Serializable2DDoubleMatrix> q(queue_ser, nullptr);
     std::vector<std::vector<double>> expected_vals_from_py = {{0.12, 0.31, 3.4}, {4.579, 5.98, 6.54}};
     Serializable2DDoubleMatrix ser_vals_from_py = q.get();
-    auto vals_from_py = ser_vals_from_py.getVal();
+    auto vals_from_py = ser_vals_from_py.val();
     for (int i=0 ; i<2 ; i++) {
         for (int j=0 ; j<3 ; j++)
             assert (vals_from_py[i][j] == expected_vals_from_py[i][j]);
@@ -279,7 +279,7 @@ dragonError_t test_custom_double_vector_pickler_dump(const char * queue_ser) {
     Queue<SerializableDoubleVector> q(queue_ser, nullptr);
     std::vector<double> expected_vals_from_py = {0.12, 0.31, 3.4};
     SerializableDoubleVector ser_vals_from_py = q.get();
-    auto vals_from_py = ser_vals_from_py.getVal();
+    auto vals_from_py = ser_vals_from_py.val();
     for (int i=0 ; i<2 ; i++)
             assert(vals_from_py[i] == expected_vals_from_py[i]);
 
@@ -298,7 +298,7 @@ dragonError_t test_custom_int_pickler_dump(const char * queue_ser) {
     Queue<SerializableInt> q(queue_ser, nullptr);
 
     SerializableInt x = q.get();
-    assert (x.getVal() == 42);
+    assert (x.val() == 42);
     return DRAGON_SUCCESS;
 }
 
@@ -312,14 +312,14 @@ dragonError_t test_custom_int_pickler_load(const char * queue_ser) {
 dragonError_t test_custom_xpickler_dump(const char * queue_ser) {
     Queue<Serializable> q(queue_ser, nullptr);
     SerializableInt x = q.get();
-    assert (x.getVal() == 42);
+    assert (x.val() == 42);
     SerializableDouble y = q.get();
-    assert(y.getVal() == 3.14);
+    assert(y.val() == 3.14);
     SerializableString s = q.get();
-    assert(s.getVal() == "Hello World");
+    assert(s.val() == "Hello World");
     std::vector<std::vector<double>> expected_vals_from_py = {{0.12, 0.31, 3.4}, {4.579, 5.98, 6.54}};
     Serializable2DDoubleMatrix ser_vals_from_py = q.get();
-    auto vals_from_py = ser_vals_from_py.getVal();
+    auto vals_from_py = ser_vals_from_py.val();
     for (int i=0 ; i<2 ; i++) {
         for (int j=0 ; j<3 ; j++)
             assert (vals_from_py[i][j] == expected_vals_from_py[i][j]);
@@ -345,7 +345,7 @@ dragonError_t test_custom_double_pickler_dump(const char * queue_ser) {
     Queue<SerializableDouble> q(queue_ser, nullptr);
 
     SerializableDouble x = q.get();
-    assert (x.getVal() == 42.0);
+    assert (x.val() == 42.0);
 
     Queue<Serializable> p(queue_ser, nullptr);
     SerializableString z("hello world");
@@ -367,7 +367,7 @@ dragonError_t test_custom_double_pickler_dump(const char * queue_ser) {
     p.put(v);
     SerializableDoubleVector w = p.get();
 
-    auto vals_from_queue = w.getVal();
+    auto vals_from_queue = w.val();
     for (int i=0 ; i<2 ; i++)
             assert(vals_from_queue[i] == vec[i]);
 
@@ -386,7 +386,7 @@ dragonError_t test_custom_str_pickler_dump(const char * queue_ser) {
     Queue<SerializableString> q(queue_ser, nullptr);
 
     SerializableString x = q.get();
-    assert (x.getVal() == "hello world");
+    assert (x.val() == "hello world");
     return DRAGON_SUCCESS;
 }
 
@@ -403,7 +403,7 @@ dragonError_t test_2d_matrix_put(const char * queue_ser) {
     Serializable2DDoubleMatrix ser_vec(vec);
     q.put(ser_vec);
     Serializable2DDoubleMatrix recv_ser_vals = q.get();
-    auto received_val = recv_ser_vals.getVal();
+    auto received_val = recv_ser_vals.val();
     for (int i=0 ; i<2 ; i++) {
         for (int j=0 ; j<3 ; j++)
             assert (received_val[i][j] == vec[i][j]);

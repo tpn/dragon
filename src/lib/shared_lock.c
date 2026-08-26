@@ -634,6 +634,9 @@ dragon_fifo_lock_destroy(dragonFIFOLock_t * dlock)
     if (dlock == NULL)
         err_return(DRAGON_INVALID_ARGUMENT,"");
 
+    if (dlock->initd == NULL)
+        err_return(DRAGON_LOCK_NOT_INITD,"");
+
     dragonLockType_t cur_initd, destroy;
     destroy = LOCK_DESTROYED;
     cur_initd = atomic_exchange_explicit(dlock->initd, destroy,
@@ -650,6 +653,9 @@ dragon_fifolite_lock_destroy(dragonFIFOLiteLock_t * dlock)
 {
     if (dlock == NULL)
         err_return(DRAGON_INVALID_ARGUMENT,"");
+
+    if (dlock->initd == NULL)
+        err_return(DRAGON_LOCK_NOT_INITD,"");
 
     dragonLockType_t cur_initd, destroy;
     destroy = LOCK_DESTROYED;

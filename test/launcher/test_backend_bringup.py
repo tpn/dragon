@@ -15,14 +15,10 @@ from .backend_testing_mocks import LauncherBackendHelper, mock_start_localservic
 
 
 def start_backend(args):
-
     # Before doing anything set my host ID
     from dragon.utils import set_procname
     from dragon.dlogging.util import DragonLoggingServices as dls
     from dragon.dlogging.util import setup_BE_logging, LOGGING_OUTPUT_DEVICE_ACTOR_FILE
-
-    # Enable debug logging in BE service
-    os.environ[f"DRAGON_LOG_DEVICE_{LOGGING_OUTPUT_DEVICE_ACTOR_FILE.upper()}"] = "DEBUG"
 
     set_procname(PROCNAME_LA_BE)
 
@@ -33,16 +29,15 @@ def start_backend(args):
     for key, value in args.items():
         if value is not None:
             log.info(f"args: {key}: {value}")
-    with LauncherBackEnd(args["transport_test"], args["network_prefix"], args["overlay_transport"], args["overlay_port"]) as be_server:
+    with LauncherBackEnd(
+        args["transport_test"], args["network_prefix"], args["overlay_transport"], args["overlay_port"]
+    ) as be_server:
         be_server.run_startup(args["ip_addrs"], args["host_ids"], args["frontend_sdesc"], level, fname)
         be_server.run_msg_server()
-
-    del os.environ[f"DRAGON_LOG_DEVICE_{LOGGING_OUTPUT_DEVICE_ACTOR_FILE.upper()}"]
 
 
 class BackendBringUpTeardownTest(unittest.TestCase):
     def setUp(self):
-
         self.test_dir = os.path.dirname(os.path.realpath(__file__))
         self.network_config = os.path.join(self.test_dir, "slurm_primary.yaml")
 
@@ -56,7 +51,6 @@ class BackendBringUpTeardownTest(unittest.TestCase):
         )
 
     def tearDown(self):
-
         # Make sure we don't leave any logging handers up
         log = logging.getLogger()
         for handler in log.handlers:
@@ -66,7 +60,6 @@ class BackendBringUpTeardownTest(unittest.TestCase):
         del self.be_helper
 
     def start_backend_thread(self, args_map):
-
         # get startup going in another thread. Note: need to do threads
         # in order to use all our mocks
         self.be_thread = threading.Thread(name="Backend Server", target=start_backend, args=(args_map,), daemon=False)

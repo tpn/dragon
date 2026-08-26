@@ -205,12 +205,12 @@ class TestProcessPolicy(GSProcessBaseClass):
         create_thread = threading.Thread(target=create_wrap, args=("test", "/tmp", ["foo", "bar"], {}, create_result))
         create_thread.start()
 
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHProcessCreate)
-        shep_reply_msg = dmsg.SHProcessCreateResponse(
-            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSProcessCreate)
+        shep_reply_msg = dmsg.LSProcessCreateResponse(
+            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_thread.join()
         desc = create_result[0]

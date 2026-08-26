@@ -8,6 +8,7 @@
 
 #include <dragon/channels.h>
 #include <dragon/exceptions.hpp>
+#include <dragon/serializable.hpp>
 
 namespace dragon {
 
@@ -50,6 +51,17 @@ class Barrier {
      * @param serialized_sem A serialized descriptor of the barrier object.
      */
     Barrier(const char* serialized_barrier, action_func action);
+
+    /**
+     * @brief Copy constructor. The copy attaches to the same Barrier on its own so
+     * both Barrier objects may be used and destroyed independently.
+     */
+    Barrier(const Barrier& other);
+
+    /**
+     * @brief Move constructor. The attachment, if any, is transferred to the new Barrier.
+     */
+    Barrier(Barrier&& other) noexcept;
 
     /**
      * @brief Destructor for a Barrier.
@@ -115,6 +127,13 @@ class Barrier {
     */
     const char* serialize();
 
+    /**
+     * @brief Convert this Barrier into a Serializable so it may be sent to another process.
+     *
+     * Only the descriptor of the Barrier is carried by the Serializable.
+     */
+    operator Serializable() const;
+
 
     private:
     bool mInternallyManaged;
@@ -124,6 +143,17 @@ class Barrier {
     uint64_t mParties;
 
 };
+
+inline SerializableBarrier::SerializableBarrier(Barrier& barrier):
+    mSerialized(std::string(barrier.serialize())) {}
+
+inline Serializable::operator Barrier() const {
+    return Barrier(asSerializableBarrier().val().c_str(), nullptr);
+}
+
+inline Barrier::operator Serializable() const {
+    return Serializable(SerializableBarrier(mSerBarrierChannel));
+}
 
 } // end dragon namespace
 

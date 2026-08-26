@@ -38,6 +38,7 @@ DIST_SOURCES := $(wildcard pkg/*) \
                 utils/test_pyheap.py \
                 utils/test_logging.py \
                 channels_subtests/test_basic_channels.py \
+                channels_subtests/test_fli.py \
 				multi-node/test_array.py \
 				multi-node/test_barrier.py \
 				multi-node/test_connection.py \
@@ -68,7 +69,7 @@ TESTS_PYTHON := test_channels.py \
                 test_infrastructure.py \
                 test_globalservices.py \
                 test_policy.py \
-                test_shepherd.py \
+                test_localservices.py \
                 $(wildcard transport/tcp/test_*.py) \
                 transport/test_lsif.py \
                 test_transport.py \
@@ -84,6 +85,7 @@ TESTS_AI := test_collective_group.py \
             test_public_api.py \
             inference \
             agent \
+            langgraph \
             torch
 
 TESTS_DRAGON := test_mpbridge.py \
@@ -144,7 +146,9 @@ $(TESTS_CCFUTURES):
 .PHONY: $(TESTS_AI)
 $(TESTS_AI):
 	@echo "Running ai tests: $@"
-	@if [ "$@" = "torch" ]; then \
+	@if [ "$@" = "langgraph" ]; then \
+	    cd ai/$@ && DYLD_LIBRARY_PATH=$(DYLD_LIBRARY_PATH) dragon -s $(PYTHON) -m unittest discover -s . -p "test_*.py" -t .; \
+	elif [ "$@" = "torch" ]; then \
 	    cd ai && DYLD_LIBRARY_PATH=$(DYLD_LIBRARY_PATH) dragon -s $(PYTHON) -m unittest discover -s torch -p "test_*.py" -t torch; \
 	elif [ -d "ai/$@" ]; then \
 	    cd ai && DYLD_LIBRARY_PATH=$(DYLD_LIBRARY_PATH) dragon -s $(PYTHON) -m unittest discover -s $@ -p "test_*.py" -t .; \
@@ -166,6 +170,11 @@ test_ai_agent:
 test_ai_torch:
 	@echo "Running ai torch test suite"
 	cd ai && DYLD_LIBRARY_PATH=$(DYLD_LIBRARY_PATH) dragon -s $(PYTHON) -m unittest discover -s torch -p "test_*.py" -t torch
+
+.PHONY: test_ai_langgraph
+test_ai_langgraph:
+	@echo "Running ai langgraph test suite"
+	cd ai/langgraph && DYLD_LIBRARY_PATH=$(DYLD_LIBRARY_PATH) dragon -s $(PYTHON) -m unittest discover -s . -p "test_*.py" -t .
 
 BUILD_COMPONENTS := $(addprefix build-,$(COMPONENTS))
 

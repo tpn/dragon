@@ -42,3 +42,15 @@ HPC clusters. See the :ref:`AgentAPI` for the full API reference.
     :maxdepth: 2
 
     agent/index.rst
+
+LangGraph Integration
+=====================
+
+A Dragon HPC backend for `LangGraph <https://langchain-ai.github.io/langgraph/>`__
+that runs existing multi-agent graphs across cluster nodes with no changes to the
+graph definition. See the :ref:`LangGraphAPI` for the full API reference.
+
+.. toctree::
+    :maxdepth: 2
+
+    langgraph/index.rst

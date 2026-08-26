@@ -1,0 +1,38 @@
+{
+    "dockerComposeFile": "docker-compose.yml",
+    "service": "frontend",
+    "runServices": [
+        "frontend",
+        "backend"
+    ],
+    "workspaceFolder": "/workspace",
+    "initializeCommand": ".devcontainer/multi-node/generate-keys.sh",
+    "onCreateCommand": [],
+    // remove the slow git status from the prompt.
+    "postStartCommand": "/workspace/.devcontainer/multi-node/frontend-post-start.sh",
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.profiles.linux": {
+                    "bash (login)": {
+                        "path": "/bin/bash",
+                        "args": [
+                            "-li"
+                        ]
+                    }
+                },
+                "terminal.integrated.defaultProfile.linux": "bash (login)"
+            },
+            "extensions": [
+            "donjayamanne.git-extension-pack",
+            "mhutchie.git-graph",
+            "ms-python.python",
+            "ms-vscode.cpptools",
+            "ms-vscode.cpptools-extension-pack",
+            "ms-vscode.cpptools-themes",
+            "njpwerner.autodocstring", // allow automatic docstrings in Python
+            "jebbs.plantuml" // support .puml UML diagrams for the docs
+            ]
+        }
+    }
+}

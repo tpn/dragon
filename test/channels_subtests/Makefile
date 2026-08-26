@@ -17,7 +17,7 @@ endif
 INCLUDE = $(DRAGON_INCLUDE)
 LIBS = $(DRAGON_LINK)
 
-DRAGON_CPP_TEST_COMMON_DEPS = $(wildcard ../../src/include/dragon/*.hpp ../../src/include/dragon/*.h) ../../src/lib/libdragon.so
+DRAGON_CPP_TEST_COMMON_DEPS = $(wildcard ../../src/include/dragon/*.hpp ../../src/include/dragon/*.h ../../src/lib/libdragon.so)
 
 
 BIN_FILES = test_ch test_bch perf_fch test_send test_poll test_peek_pop test_channelsets test_wrong test_gateways test_gateway_messages test_fli test_capnp

@@ -9,6 +9,7 @@ import atexit
 from typing import List, Tuple, Dict
 
 from .. import channels as dch
+from .. import managed_memory as dmm
 
 from ..globalservices import api_setup as das
 from ..globalservices import channel as dgchan
@@ -625,7 +626,8 @@ def create_with_argdata(
             policy=policy,
         )
 
-    elif len(argdata) <= dfacts.ARG_IMMEDIATE_LIMIT:
+    else:
+        ## CPW: When we changed connection -> queue for infrastructure it should be safe for argdata to be sent as a queue message (even if it's bigger than channel block sizes) since queue handles the serialization and chunking of the message in a way that is consistent with a many-to-many pattern.
         # deliver arguments in the argdata directly.
         options.mode = pdesc.ArgMode.PYTHON_IMMEDIATE
 
@@ -645,52 +647,6 @@ def create_with_argdata(
             stderr=stderr,
             policy=policy,
         )
-    else:
-        # TODO: capture these comments in documentation
-        # Here we don't set argdata to anything at all.
-        # GS will already be creating a channel local to the new process
-        # for use in responding to that process's GS requests.
-        # The ID of that channel is in the process descriptor that
-        # is returned, so we will borrow that channel to send
-        # the argument data.
-        # There is no race, because the process will need to receive
-        # its arguments before it can make any GS calls.
-        # See globalservices.api_setup.py.
-
-        options.mode = pdesc.ArgMode.PYTHON_CHANNEL
-        options.argdata = None
-
-        the_desc = create(
-            exe=exe,
-            run_dir=run_dir,
-            args=args,
-            env=env,
-            user_name=user_name,
-            options=options,
-            soft=soft,
-            pmi=pmi,
-            stdin=stdin,
-            stdout=stdout,
-            stderr=stderr,
-            policy=policy,
-        )
-
-        # Another transaction to gs but we are only here if
-        # we are sending a lot of data.  Could be returned with create call
-        # optionally.  Don't want to put the whole gs ret channel descriptor
-        # in the process descriptor because this is the only legit
-        # use for that.
-        gs_ret_desc = dgchan.query(the_desc.gs_ret_cuid)
-        gsret = dch.Channel.attach(gs_ret_desc.sdesc)
-        # TODO PE-38745
-        arg_conn = dconn.Connection(
-            outbound_initializer=gsret,
-            options=dconn.ConnectionOptions(min_block_size=2**16),
-            policy=dparm.POLICY_INFRASTRUCTURE,
-        )
-        arg_conn.send_bytes(argdata)
-        arg_conn.ghost_close()  # avoids sending an extra EOT message
-        gsret.detach()
 
     return _create_stdio_connections(the_desc)
 

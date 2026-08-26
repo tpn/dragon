@@ -1,7 +1,6 @@
 # FORMAT
 #
 # required-package: tag1, tag2, ...
-
 alive-progress>=3.2.0:          telemetry, dev
 auditwheel>=6.2.0:              dev
 biopython:                      examples
@@ -20,6 +19,7 @@ ipywidgets:                     telemetry
 joblib:                         examples
 jupyter>=1.1.1:                 examples, services
 kubernetes>=32.0.0:             dev, services
+langgraph:                      ai, test
 matplotlib:                     examples
 mpi4py:                         examples
 msgspec:                        ai, test

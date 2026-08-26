@@ -1,11 +1,15 @@
 import os
 import re
+import logging
 import shutil
 import subprocess
 
-from .base import BaseWLM
+from .base import WLM, BaseWLM
 from ...infrastructure import facts as dfacts
 from ...infrastructure.config import _load_config_from_file
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_nodefile_node_count(filename) -> int:
@@ -17,6 +21,7 @@ def get_nodefile_node_count(filename) -> int:
 
 
 class PBSWLM(BaseWLM):
+    name = WLM.PBS.value
     MPIEXEC_COMMAND_LINE = "mpiexec --np {nnodes} -ppn 1 -l --line-buffer"
     ENV_PBS_JOB_ID = "PBS_JOBID"
 
@@ -49,24 +54,40 @@ Resubmit as part of a 'qsub' execution"""
             self.MPIEXEC_ARGS = self.MPIEXEC_COMMAND_LINE.format(nnodes=node_count).split()
 
     @classmethod
-    def check_for_wlm_support(cls) -> bool:
+    def check_for_wlm_support(cls) -> int:
         # Look for qstat which is part of PBS
         qstat = shutil.which("qstat")
         if not qstat or re.match(".*/pbs/.*", qstat) is None:
-            return False
+            logger.info("PBS was not detected on the system.")
+            return 0
 
         # Now to see if we have a supported version of mpiexec
         if mpiexec := shutil.which("mpiexec"):
+            priority = 0
             if re.match(".*/pals/.*", mpiexec) is None:
-                raise RuntimeError(
+                logger.warning(
                     "PBS has been detected on the system. However, Dragon is only compatible with a PALS mpiexec and it was not found."
                 )
-            return True
+                return 0
 
-        raise RuntimeError("PBS was detected on the system, but Dragon cannot find the mpiexec command.")
+            logger.info(f"PBS was detected on the system and mpiexec was found.")
+
+            if cls.has_allocation():
+                logger.info("PBS job allocation detected.")
+                return 2
+
+            logger.info("No PBS job allocation detected.")
+            return 1
+
+        logger.warning("PBS was detected on the system, but Dragon cannot find the mpiexec command.")
+        return 0
 
     @classmethod
-    def check_for_allocation(cls) -> bool:
+    def requires_allocation(cls) -> bool:
+        return True
+
+    @classmethod
+    def has_allocation(cls) -> bool:
         return os.environ.get(cls.ENV_PBS_JOB_ID) is not None
 
     def _get_wlm_job_id(self) -> str:

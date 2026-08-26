@@ -57,6 +57,8 @@ class NetworkConfigState(Enum):
 
 class BaseWLM(ABC):
 
+    name = "BaseWLM"
+
     def __init__(self, wlm, network_prefix, port):
         self.wlm = wlm
         self.NETWORK_CFG_HELPER_LAUNCH_CMD = [
@@ -96,16 +98,45 @@ class BaseWLM(ABC):
 
         self._state = NetworkConfigState.NONE
 
-    @property
-    def name(self) -> str:
-        return self.wlm
-
     @classmethod
-    def check_for_wlm_support(cls) -> bool:
+    def check_for_wlm_support(cls, *args, **kwargs) -> int:
+        """
+        Each WLM implementation will check WLM specific critera to determine if the WLM is supported
+        on the system. This may include checking the system and user environment for the presence of
+        WLM specific environment variables, checking for the presence of WLM specific binaries, etc.
+
+        The following example helps illustrate the expected behavior of this method.
+        - PBS or Slurm is detected, but no allocation is present. The method should return 1.
+        - PBS or Slurm is detected, and an allocation is present. The method should return 2.
+        - Drun detects the DRAGON_RUN_NODEFILE environment variable. The method should
+          return 3 since Drun should take precedence over other WLMs.
+
+        Returns:
+            An integer value greater than or equal to 0.
+              - If the WLM is not supported, it should return 0.
+              - A positive integer value indicates that the WLM is supported. The larger the return
+                value, the more "preferred" the WLM is for use on the system. This allows for a
+                priority ordering of WLMs in the case that multiple WLMs are supported and their
+                use needs to be disambiguated.
+        """
         raise NotImplementedError
 
     @classmethod
-    def check_for_allocation(cls) -> bool:
+    def requires_allocation(cls) -> bool:
+        """
+        Indicates whether the WLM requires an active allocation to be present in order to launch a backend process.
+        Returns:
+            True if the WLM requires an active allocation, False otherwise.
+        """
+        raise NotImplementedError
+
+    @classmethod
+    def has_allocation(cls) -> bool:
+        """
+        Indicates whether an active allocation is present.
+        Returns:
+            True if an active allocation is present, False otherwise.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -123,7 +154,14 @@ class BaseWLM(ABC):
         stderr_stream = NewlineStreamWrapper(self.config_helper.stderr)
         node_returns = 0
         temp_uniqueness_guarantee = set()
-        while self.config_helper.poll() is None:
+
+        # There is a small window where the config_helper can exit, but
+        # we haven't yet read from its stdout/stderr. To prevent this,
+        # we loop for one extra iteration after config_helper.poll
+        # returns non-None to ensure we capture all remaining output.
+
+        poll_result = self.config_helper.poll()
+        while True:
 
             lines = []
             node_descriptor_count = len(self.node_descriptors.keys())
@@ -182,10 +220,14 @@ class BaseWLM(ABC):
                         temp_uniqueness_guarantee.add(str(wlm_id))
                     node_returns += 1
 
+            if poll_result is not None:
+                break
+            poll_result = self.config_helper.poll()
+
         # Keep iteration deterministic after asynchronous helper output so
         # downstream code sees network-config entries in node-index order.
         self.node_descriptors = dict(sorted(self.node_descriptors.items(), key=lambda item: int(item[0])))
-        self.LOGGER.debug("received %d NodeDescriptors", node_returns)
+        self.LOGGER.debug("Done parsing network config. Total NodeDescriptors received is %d", node_returns)
         self.NNODES = node_returns
 
     def _sigint_teardown(self):

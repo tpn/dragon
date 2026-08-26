@@ -7,7 +7,9 @@ from io import StringIO
 from unittest.mock import patch
 from dragon.launcher.launchargs import get_parser
 from dragon.launcher import launch_selector as dls
-from dragon.launcher.wlm import SlurmWLM
+from dragon.launcher.wlm import WLM, wlm_cls_dict, SlurmWLM
+from dragon.launcher.wlm.pbs import PBSWLM
+from dragon.tools.dragon_run.src.facts import ENV_DRAGON_RUN_NODE_FILE
 
 from .launcher_testing_utils import catch_thread_exceptions
 from .frontend_testing_mocks import run_frontend
@@ -31,10 +33,152 @@ def get_args_map(network_config, network_prefix="^(eth|hsn|en)", **kwargs):
 
 class LaunchSelectionTest(unittest.TestCase):
 
+    @staticmethod
+    def mock_which_no_wlm(cmd):
+        return None
+
+    @staticmethod
+    def mock_which_slurm(cmd):
+        if cmd == "srun":
+            return "/opt/slurm/bin/srun"
+        return None
+
+    @staticmethod
+    def mock_which_pbs_with_pals(cmd):
+        if cmd == "qstat":
+            return "/opt/pbs/bin/qstat"
+        elif cmd == "mpiexec":
+            return "/opt/cray/pe/pals/default/bin/mpiexec"
+        return None
+
+    @staticmethod
+    def mock_which_pbs_no_pals(cmd):
+        if cmd == "qstat":
+            return "/opt/pbs/bin/qstat"
+        elif cmd == "mpiexec":
+            return "/usr/bin/mpiexec"
+        return None
+
+    @staticmethod
+    def mock_which_slurm_and_pbs(cmd):
+        if cmd == "srun":
+            return "/opt/slurm/bin/srun"
+        elif cmd == "qstat":
+            return "/opt/pbs/bin/qstat"
+        elif cmd == "mpiexec":
+            return "/opt/cray/pe/pals/default/bin/mpiexec"
+        return None
+
+    @patch("shutil.which")
+    def test_detect_wlm_specify_wlm(self, mock_which):
+        """
+        Test that detect wlm returns the correct WLM class
+        when a specific workload manager is requested.
+        """
+        mock_which.side_effect = self.mock_which_no_wlm
+        for wlm, cls in wlm_cls_dict.items():
+            self.assertEqual(cls, dls.detect_wlm(wlm.value))
+        self.assertEqual(mock_which.call_count, 0)  # no need to call which if user specifies wlm
+
+    @patch("shutil.which")
+    def test_detect_wlm_no_available_wlm(self, mock_which):
+        """
+        Test that detect_wlm return None if it can't detect
+        a workload manager on the system.
+        """
+        mock_which.side_effect = self.mock_which_no_wlm
+        self.assertIsNone(dls.detect_wlm(None))
+
+    @patch("shutil.which")
+    def test_detect_wlm_auto_detect_slurm(self, mock_which):
+        """
+        Test that detect_wlm returns the correct WLM class
+        when auto-detecting a workload manager.
+        """
+        mock_which.side_effect = self.mock_which_slurm
+        with patch.dict(environ, {SlurmWLM.ENV_SLURM_JOB_ID: "1234"}):
+            self.assertEqual(SlurmWLM, dls.detect_wlm(None))
+
+    @patch("shutil.which")
+    def test_detect_wlm_auto_detect_pbs(self, mock_which):
+        """
+        Test that detect_wlm returns the correct WLM class
+        when auto-detecting a workload manager.
+        """
+        mock_which.side_effect = self.mock_which_pbs_with_pals
+        with patch.dict(environ, {PBSWLM.ENV_PBS_JOB_ID: "1232"}):
+            self.assertEqual(wlm_cls_dict[WLM.PBS], dls.detect_wlm(None))
+
+    @patch("shutil.which")
+    def test_detect_wlm_auto_dragon_run(self, mock_which):
+        """
+        Test that detect_wlm returns the correct WLM class
+        when auto-detecting a workload manager.
+        """
+        mock_which.side_effect = self.mock_which_no_wlm
+        with patch.dict(environ, {ENV_DRAGON_RUN_NODE_FILE: "/tmp/dragon_run_nodefile"}):
+            self.assertEqual(wlm_cls_dict[WLM.DRUN], dls.detect_wlm(None))
+
+    @patch("shutil.which")
+    def test_detect_wlm_slurm_and_pbs(self, mock_which):
+        """
+        Test that detect_wlm returns the correct WLM class
+        when auto-detecting a workload manager.
+        """
+        mock_which.side_effect = self.mock_which_slurm_and_pbs
+
+        # Test that if both slurm and pbs are detected, and neither has an allocation,
+        # we raise an exception
+        with self.assertRaises(RuntimeError) as e:
+            dls.detect_wlm(None)
+        self.assertTrue("no active job allocations were found." in str(e.exception))
+        self.assertTrue("slurm, pbs+pals" in str(e.exception))
+
+        # Test that if both slurm and pbs are detected, and both have an allocation,
+        # we raise an exception
+        with patch.dict(
+            environ,
+            {
+                SlurmWLM.ENV_SLURM_JOB_ID: "1234",
+                PBSWLM.ENV_PBS_JOB_ID: "1232",
+            },
+        ):
+            with self.assertRaises(RuntimeError) as e:
+                dls.detect_wlm(None)
+            self.assertTrue("Multiple supported WLMs were detected" in str(e.exception))
+            self.assertTrue("slurm, pbs+pals" in str(e.exception))
+
+        # Test that if both slurm and pbs are detected, and only Slurm has an allocation,
+        # Slurm is returned
+        with patch.dict(environ, {SlurmWLM.ENV_SLURM_JOB_ID: "1234"}):
+            self.assertEqual(wlm_cls_dict[WLM.SLURM], dls.detect_wlm(None))
+
+        # Test that if both slurm and pbs are detected, and only pbs has an allocation,
+        # pbs is returned
+        with patch.dict(environ, {PBSWLM.ENV_PBS_JOB_ID: "1232"}):
+            self.assertEqual(wlm_cls_dict[WLM.PBS], dls.detect_wlm(None))
+
+    @patch("shutil.which")
+    def test_detect_wlm_auto_prefer_dragon_run_over_slurm(self, mock_which):
+        """
+        Test that detect_wlm returns the correct WLM class
+        when auto-detecting a workload manager.
+        """
+        mock_which.side_effect = self.mock_which_slurm
+        with patch.dict(
+            environ,
+            {
+                SlurmWLM.ENV_SLURM_JOB_ID: "1234",
+                ENV_DRAGON_RUN_NODE_FILE: "/tmp/dragon_run_nodefile",
+            },
+        ):
+            self.assertEqual(wlm_cls_dict[WLM.DRUN], dls.detect_wlm(None))
+
     @patch("sys.argv", ["dragon", "dummy.py"])
-    @patch("shutil.which", return_value=None)
+    @patch("shutil.which")
     def test_single_automatic_selection(self, mock_which):
         """Route to the single node launcher"""
+        mock_which.side_effect = self.mock_which_no_wlm
         multi_mode = dls.determine_environment()
         self.assertFalse(multi_mode)
 
@@ -43,7 +187,7 @@ class LaunchSelectionTest(unittest.TestCase):
     @patch.dict(environ, {"SLURM_JOB_ID": "3195234.0"})
     def test_multinode_automatic_selection_slurm(self, mock_which):
         """Route to the multinode launcher"""
-        mock_which.side_effect = ["/opt/slurm/bin/qstat", "/usr/bin/srun", None]
+        mock_which.side_effect = self.mock_which_slurm
         multi_mode = dls.determine_environment()
         self.assertTrue(multi_mode)
 
@@ -52,44 +196,34 @@ class LaunchSelectionTest(unittest.TestCase):
     @patch.dict(environ, {k: v for k, v in dict(environ).items() if k != "SLURM_JOB_ID"}, clear=True)
     def test_multinode_auto_without_allocation_slurm(self, mock_which):
         """Raise exception due to slurm being present with no job allocation"""
-        mock_which.side_effect = ["/opt/slurm/bin/qstat", "/usr/bin/srun"]
+        mock_which.side_effect = self.mock_which_slurm
         with self.assertRaises(RuntimeError) as e:
             dls.determine_environment()
-        self.assertTrue("Executing in a Slurm environment, but with no job allocation" in str(e.exception))
+        self.assertTrue("no active job allocations were found." in str(e.exception))
+        self.assertTrue("Detected workload managers: slurm." in str(e.exception))
 
     @patch("sys.argv", ["dragon", "dummy.py"])
     @patch("shutil.which")
     @patch.dict(environ, {"PBS_NODEFILE": ""})
     def test_multinode_auto_without_allocation_pbs_bad_mpiexec(self, mock_which):
         """Raise exception due to PBS  being present with no job allocation and a bad mpiexec in path"""
-        mock_which.side_effect = ["/opt/pbs/bin/qstat", "/usr/bin/mpiexec", None]
-        with self.assertRaises(RuntimeError) as e:
-            dls.determine_environment()
-        print(f"{str(e.exception)}")
-        self.assertTrue(
-            "PBS has been detected on the system. However, Dragon is only compatible with a PALS mpiexec"
-            in str(e.exception)
-        )
+        mock_which.side_effect = self.mock_which_pbs_no_pals
+        self.assertFalse(dls.determine_environment())
 
     @patch("sys.argv", ["dragon", "dummy.py"])
     @patch("shutil.which")
     @patch.dict(environ, {"PBS_NODEFILE": "/a/presumably/valid/path"})
     def test_multinode_auto_with_allocation_pbs_bad_mpiexec(self, mock_which):
         """Raise exception due to PBS being present with job allocation but a bad mpiexec in path"""
-        mock_which.side_effect = ["/opt/pbs/bin/qstat", None, "/usr/bin/mpiexec"]
-        with self.assertRaises(RuntimeError) as e:
-            dls.determine_environment()
-        print(f"{str(e.exception)}")
-        self.assertTrue(
-            "PBS was detected on the system, but Dragon cannot find the mpiexec command." in str(e.exception)
-        )
+        mock_which.side_effect = self.mock_which_pbs_no_pals
+        self.assertFalse(dls.determine_environment())
 
     @patch("sys.argv", ["dragon", "dummy.py"])
     @patch("shutil.which")
     @patch.dict(environ, {"PBS_JOBID": "123"})
     def test_multinode_auto_with_allocation_pbs_good_mpiexec(self, mock_which):
         """Correctly identify we're doing PBS and PALS"""
-        mock_which.side_effect = ["/opt/pbs/bin/qstat", "/opt/cray/pe/pals/default/bin/mpiexec", None]
+        mock_which.side_effect = self.mock_which_pbs_with_pals
         multi_mode = dls.determine_environment()
         self.assertTrue(multi_mode)
 
@@ -97,12 +231,11 @@ class LaunchSelectionTest(unittest.TestCase):
     @patch("shutil.which")
     def test_multinode_auto_without_allocation_pbs_good_mpiexec(self, mock_which):
         """Correctly identify we're doing PBS and PALS"""
-        mock_which.side_effect = ["/opt/pbs/bin/qstat", "/opt/cray/pe/pals/default/bin/mpiexec", None]
+        mock_which.side_effect = self.mock_which_pbs_with_pals
         with self.assertRaises(RuntimeError) as e:
             dls.determine_environment()
-        self.assertTrue(
-            "Using a supported PALS with PBS config. However, no active jobs allocation" in str(e.exception)
-        )
+        self.assertTrue("no active job allocations were found." in str(e.exception))
+        self.assertTrue("Detected workload managers: pbs+pals." in str(e.exception))
 
     @patch("sys.argv", ["dragon", "--single-node-override", "dummy.py"])
     def test_single_node_override(self):

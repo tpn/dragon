@@ -4,7 +4,7 @@ Installation
 ++++++++++++
 
 Dragon currently supports Python 3.11, 3.12, and 3.13. The published package is
-built for Linux environments with ``manylinux2014`` compatibility, so most users
+built for Linux environments with ``manylinux_2_28`` compatibility, so most users
 will install Dragon into a Linux virtual environment on a workstation, server,
 or HPC system. As of v0.14.1 whls for MacOS are also provided on PyPI.
 
@@ -29,7 +29,20 @@ isolated from the rest of your system.
     pip install dragonhpc
 
 After the installation completes, you have everything needed to run Dragon
-multiprocessing programs on a single node.
+multiprocessing programs on a single node. For best performance with multi-node support,
+you should configure the high speed transport to use UCX or OFI as follows (modifying
+the path(s) as appropriate for your system):
+
+.. code-block:: console
+
+    # For UCX communication, provide a library path that contains a libucp.so:
+    dragon-config add --ucx-runtime-lib=/opt/nvidia/hpc_sdk/Linux_x86_64/23.11/comm_libs/12.3/hpcx/hpcx-2.16/ucx/prof/lib
+
+    # For OFI communication, provide a library path that contains a libfabric.so:
+    dragon-config add --ofi-runtime-lib=/opt/cray/libfabric/1.22.0/lib64
+
+
+For more info on configuring the transport agent, see :ref:`transport-agent-configuration`.
 
 Extra requirements
 ===================
@@ -95,6 +108,8 @@ This script will:
 
 After installation, reload your shell or run ``source ~/.bashrc`` (or equivalent) to
 enable completions.
+
+.. _transport-agent-configuration:
 
 Optional Multi-Node Transport Configuration
 ===========================================

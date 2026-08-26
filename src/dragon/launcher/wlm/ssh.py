@@ -1,4 +1,3 @@
-import shutil
 import subprocess
 import selectors
 import json
@@ -123,7 +122,7 @@ class SSHSubprocessPopen:
         self.pid = [proc.pid for proc in self.procs.values()]
 
         self._returncode = None
-        self._ret_codes = []
+        self._ret_codes : Dict[int, int] = {}
 
         # Set up newlinestreamwrappers for each of the subprocess stdout/stderr
         self._stdouts = [(i, proc.stdout) for i, proc in enumerate(self.procs.values()) if proc.stdout is not None]
@@ -147,9 +146,12 @@ class SSHSubprocessPopen:
 
         If not all procs have exited, return None. Otherwise returncode
         """
-        for proc in self.procs.values():
+
+        # Get a list of processes we don't have a retcode from yet
+        check_procs = [ proc for proc in self.procs.values() if proc.pid not in self._ret_codes ]
+        for proc in check_procs:
             if proc.poll() is not None:
-                self._ret_codes.append(proc.returncode)
+                self._ret_codes[proc.pid] = proc.returncode
 
         if len(self._ret_codes) == self.nprocs:
             return self.returncode
@@ -159,12 +161,14 @@ class SSHSubprocessPopen:
     def wait(self, timeout=None):
         """Wait on exit for all Popen objects"""
 
-        for proc in self.procs.values():
+        # Get a list of processes we don't have a retcode from yet
+        check_procs = [ proc for proc in self.procs.values() if proc.pid not in self._ret_codes ]
+        for proc in check_procs:
             # TODO: We don't want to necessarily wait the full timeout
             #       for each Popen object. Ideally, we'd aggregate this
             #       timeout over multiple calls to wait
             if proc.wait(timeout=timeout) is not None:
-                self._ret_codes.append(proc.returncode)
+                self._ret_codes[proc.pid] = proc.returncode
 
         if len(self._ret_codes) == self.nprocs:
             return self.returncode
@@ -205,19 +209,28 @@ class SSHSubprocessPopen:
     def returncode(self):
         """Return return codes for Popen objects"""
 
-        if isinstance(self._ret_codes, list) and len(self._ret_codes):
-            code_group = groupby(self._ret_codes)
+        # If we already have a return code, use it.
+        if self._returncode is not None:
+            return self._returncode
+
+        # If we have return codes for all processes, determine the overall return code.
+        if isinstance(self._ret_codes, dict) and len(self._ret_codes) == self.nprocs:
+            ret_codes = list(self._ret_codes.values())
+            code_group = groupby(ret_codes)
             # If they're all the same, return any one of them
             if next(code_group, True) and not next(code_group, False):
-                self._returncode = self._ret_codes[0]
+                self._returncode = ret_codes[0]
             # if not, return the first non-zero:
             else:
-                self._returncode = next((code for code in self._ret_codes if code != 0), 0)
+                self._returncode = next((code for code in ret_codes if code != 0), 0)
 
+        # return the computed returncode or None if there are processes still running
         return self._returncode
 
 
 class SSHWLM(BaseWLM):
+
+    name = WLM.SSH.value
 
     def __init__(self, network_prefix, port, hostlist):
         nhosts = len(hostlist) if hostlist is not None else 0
@@ -226,11 +239,17 @@ class SSHWLM(BaseWLM):
         self.ENV_VARS = None
 
     @classmethod
-    def check_for_wlm_support(cls) -> bool:
-        return shutil.which("ssh") is not None
+    def check_for_wlm_support(cls) -> int:
+        # We don't want to auto-detect the SSH WLM, so return 0.
+        # The user must explicitly specify the SSH WLM via the command line.
+        return 0
 
     @classmethod
-    def check_for_allocation(cls) -> bool:
+    def requires_allocation(cls) -> bool:
+        return False
+
+    @classmethod
+    def has_allocation(cls) -> bool:
         return True
 
     def _get_wlm_job_id(self) -> str:

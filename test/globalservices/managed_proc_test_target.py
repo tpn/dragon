@@ -26,6 +26,7 @@ import dragon.managed_memory as dmm
 import dragon.infrastructure.parameters as dparms
 import dragon.dlogging.util as dlog
 import dragon.utils as du
+from dragon.infrastructure.queue import InfraQueue
 
 import pickle
 
@@ -89,21 +90,14 @@ except Exception as err:
     exit(1)
 
 
-if 0 == len(dparms.this_process.gs_cd):
+if 0 == len(dparms.this_process.gs_qd):
     log.info("GS cd absent")
     exit(1)
 
-log.info("gs desc is: {}".format(show_desc(dparms.this_process.gs_cd)))
+log.info("gs desc is: {}".format(show_desc(dparms.this_process.gs_qd)))
 
 try:
-    gs_desc = du.B64.str_to_bytes(dparms.this_process.gs_cd)
-except binascii.Error as err:
-    log.info("Failed to decode GS cd")
-    log.exception(f"error is {err}", exc_info=True)
-    exit(1)
-
-try:
-    gs_chan = dch.Channel.attach(gs_desc)
+    gs_chan = InfraQueue.attach(dparms.this_process.gs_qd, mpool=defpool)
     log.info("attached to gs channel")
 except Exception as err:
     log.info("Failed to attach to gs channel")
@@ -113,21 +107,21 @@ except Exception as err:
 if check_gs_ret:
     log.info("checking gs ret channel")
 
-    if 0 == len(dparms.this_process.gs_ret_cd):
+    if 0 == len(dparms.this_process.gs_ret_qd):
         log.info("GS ret cd absent")
         exit(1)
 
-    log.info("gs return desc is: {}".format(show_desc(dparms.this_process.gs_ret_cd)))
+    log.info("gs return desc is: {}".format(show_desc(dparms.this_process.gs_ret_qd)))
 
     try:
-        gs_return_desc = du.B64.str_to_bytes(dparms.this_process.gs_ret_cd)
+        gs_return_desc = dparms.this_process.gs_ret_qd
     except binascii.Error as err:
         log.info("Failed to decode GS return cd")
         log.exception(f"error is {err}", exc_info=True)
         exit(1)
 
     try:
-        gs_ret_chan = dch.Channel.attach(gs_return_desc)
+        gs_ret_chan = InfraQueue.attach(gs_return_desc)
         log.info("attached to gs return channel")
     except Exception as err:
         log.info("Failed to attach to gs return channel")

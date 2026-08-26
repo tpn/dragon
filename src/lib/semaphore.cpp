@@ -1,13 +1,14 @@
 #include <dragon/semaphore.hpp>
 #include <dragon/exceptions.hpp>
 #include <dragon/utils.h>
+#include <utility>
 
 namespace dragon {
 
 // Future Work: We'll support a Semaphore that will be totally life-cycle managed from C++.
 // What that looks like is a little up in the air but might, for instance, have its
 // lifecycle managed by the process that created it. Then a process local channel could be used.
-// We'll also likely want to redo the SHCreateProcessLocalChannel message to include a b64 encoded
+// We'll also likely want to redo the LSCreateProcessLocalChannel message to include a b64 encoded
 // attributes structure so all the arguments to dragon_create_process_local_channel could be replaced
 // with an attributes structure. Other messages with similarly large number of arguments might be
 // rewritten the same way to support an attributes structure being passed in to them as a b64
@@ -61,6 +62,14 @@ Semaphore::Semaphore(const char* serialized_sem) {
     err = dragon_channel_attach(&ser_chan, &mSemChannel);
     if (err != DRAGON_SUCCESS)
         throw DragonError(err, "Could not attach to Dragon Semaphore channel.");
+}
+
+Semaphore::Semaphore(const Semaphore& other): Semaphore(other.mSerSemChannel.c_str()) {}
+
+Semaphore::Semaphore(Semaphore&& other) noexcept: mInternallyManaged(other.mInternallyManaged),
+    mSemChannel(other.mSemChannel), mSerSemChannel(std::move(other.mSerSemChannel)) {
+
+    other.mInternallyManaged = false;
 }
 
 Semaphore::~Semaphore() {

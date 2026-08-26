@@ -1,8 +1,6 @@
-import os
 import sys
-import shutil
 
-from .wlm import WLM, wlm_cls_dict
+from .util import detect_wlm
 
 
 def determine_environment(args=None):
@@ -46,51 +44,8 @@ Please specify only '--single-node-override' or '--multi-node-override'"""
     if multi_arg:
         return True
 
-    # Try to determine if we're on a supported multinode system
-    if wlm != "":
-        # only one of these will be true
-        is_pbs = wlm == str(WLM.PBS)
-        is_slurm = wlm == str(WLM.SLURM)
-        is_ssh = wlm == str(WLM.SSH)
-        is_drun = wlm == str(WLM.DRUN)
-        is_k8s = wlm == str(WLM.K8S)
-    else:
-        # Likewise, only one of these will be true (unless somehow they have both PBS and slurm installed)
-        is_pbs = wlm_cls_dict[WLM.PBS].check_for_wlm_support()
-        is_slurm = wlm_cls_dict[WLM.SLURM].check_for_wlm_support()
-        is_ssh = False
-        is_drun = False
-        is_k8s = (os.getenv("KUBERNETES_SERVICE_HOST", None) and os.getenv("KUBERNETES_SERVICE_PORT", None)) is not None
-
-    if is_ssh + is_drun + is_pbs + is_slurm + is_k8s >= 2:
-        # adding the booleans here is a quick check that two or more are not True.
-        raise RuntimeError(
-            "Dragon cannot determine the correct multi-node launch mode. Please specify the workload manager with --wlm"
-        )
-
-    if any([is_ssh, is_drun, is_k8s]):
-        # If we're using SSH, DRUN, or K8s, we can use the multi node launcher
-        return True
-
-    if is_pbs:
-        if not wlm_cls_dict[WLM.PBS].check_for_allocation():
-            msg = """Using a supported PALS with PBS config. However, no active jobs allocation
-has been detected. Resubmit as part of a 'qsub' execution."""
-            raise RuntimeError(msg)
-
-        return True
-
-    if is_slurm:
-        # Check if we have nodes allocated. If not, raise an
-        # exception
-        if not wlm_cls_dict[WLM.SLURM].check_for_allocation():
-            msg = """Executing in a Slurm environment, but with no job allocation.
-    Resubmit as part of an 'salloc' or 'sbatch' execution"""
-            raise RuntimeError(msg)
-
-        return True
-
-    return False
+    wlm = detect_wlm(wlm)
+    return True if wlm is not None else False
 
 
 def get_launcher():

@@ -90,4 +90,5 @@ src/lib/libkj-tls.la
 src/lib/libkj.la
 src/lib/pkgconfig/
 src/dragon/lib
-
+.devcontainer/multi-node/id_ed25519
+.devcontainer/multi-node/id_ed25519.pub

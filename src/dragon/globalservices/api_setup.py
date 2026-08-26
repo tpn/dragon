@@ -35,18 +35,18 @@ def next_tag():
 
 _ARG_PAYLOAD = None
 
-_GS_INPUT_CHANNEL = None
+_GS_INPUT_QUEUE = None
 _GS_RETURN_CHANNEL = None
-_LOCAL_SHEP_INPUT_CHANNEL = None
-_LOCAL_SHEP_RETURN_CHANNEL = None
+_LOCAL_LS_INPUT_QUEUE = None
+_LOCAL_LS_RETURN_CHANNEL = None
 
 _GS_INPUT = None
 _GS_RETURN = None
-_SHEP_INPUT = None
-_SHEP_RETURN = None
+_LS_INPUT = None
+_LS_RETURN = None
 
 _GS_RETURN_CUID = None
-_SHEP_RETURN_CUID = None
+_LS_RETURN_CUID = None
 
 
 def get_gs_ret_cuid():
@@ -62,76 +62,81 @@ def load_launch_parameter(name):
     return du.B64.str_to_bytes(param)
 
 
-def _connect_gs_input():
-    global _GS_INPUT_CHANNEL
+def load_launch_parameter_queue(name):
+    param = getattr(dp.this_process, name.lower())
+    assert param, f"Launch parameter not initialized: {name}"
+    return param
 
-    channel_descriptor = load_launch_parameter(dfacts.GS_CD)
-    _GS_INPUT_CHANNEL = dch.Channel.attach(channel_descriptor)
-    # size chosen to be safely above ARG_IMMEDIATE_LIMIT
-    # TODO PE-38745
-    return dconn.Connection(
-        outbound_initializer=_GS_INPUT_CHANNEL,
-        options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23),
-        policy=dp.POLICY_INFRASTRUCTURE,
-    )
+
+def _connect_gs_input():
+    global _GS_INPUT_QUEUE
+    from dragon.infrastructure.queue import InfraQueue
+
+    queue_descriptor = load_launch_parameter_queue(dfacts.GS_QD)
+    _GS_INPUT_QUEUE = InfraQueue.attach(queue_descriptor)
+    return _GS_INPUT_QUEUE
 
 
 def _connect_gs_return():
-    global _GS_RETURN_CHANNEL
+    global _GS_RETURN_QUEUE
     global _GS_RETURN_CUID
+    from dragon.infrastructure.queue import InfraQueue
 
-    channel_descriptor = load_launch_parameter(dfacts.GS_RET_CD)
-    _GS_RETURN_CHANNEL = dch.Channel.attach(channel_descriptor)
-    _GS_RETURN_CUID = _GS_RETURN_CHANNEL.cuid
-    return dconn.Connection(inbound_initializer=_GS_RETURN_CHANNEL, policy=dp.POLICY_INFRASTRUCTURE)
-
-
-def _connect_shep_input():
-    global _LOCAL_SHEP_INPUT_CHANNEL
-
-    channel_descriptor = load_launch_parameter(dfacts.LOCAL_SHEP_CD)
-    _LOCAL_SHEP_INPUT_CHANNEL = dch.Channel.attach(channel_descriptor)
-    return dconn.Connection(outbound_initializer=_LOCAL_SHEP_INPUT_CHANNEL, policy=dp.POLICY_INFRASTRUCTURE)
+    queue_descriptor = load_launch_parameter_queue(dfacts.GS_RET_QD)
+    _GS_RETURN_QUEUE = InfraQueue.attach(queue_descriptor)
+    _GS_RETURN_CUID = _GS_RETURN_QUEUE.cuid
+    return _GS_RETURN_QUEUE
 
 
-def _connect_shep_return():
-    global _LOCAL_SHEP_RETURN_CHANNEL
-    global _SHEP_RETURN_CUID
+def _connect_ls_input():
+    global _LOCAL_LS_INPUT_QUEUE
 
-    # currently we have no use for the shep return cd (although we might in the future)
+    from dragon.infrastructure.queue import InfraQueue
+
+    queue_descriptor = load_launch_parameter_queue(dfacts.LOCAL_LS_QD)
+    _LOCAL_LS_INPUT_QUEUE = InfraQueue.attach(queue_descriptor)
+    return _LOCAL_LS_INPUT_QUEUE
+
+
+def _connect_ls_return():
+    global _LOCAL_LS_RETURN_QUEUE
+    global _LS_RETURN_CUID
+    from dragon.infrastructure.queue import InfraQueue
+
+    # currently we have no use for the ls return cd (although we might in the future)
     # it isn't currently being constructed by GS so here we will see if it
     # is present and return None if it isn't.
 
     try:
-        channel_descriptor = load_launch_parameter(dfacts.SHEP_RET_CD)
+        queue_descriptor = load_launch_parameter_queue(dfacts.LS_RET_QD)
     except AssertionError:
         return None
-    _LOCAL_SHEP_RETURN_CHANNEL = dch.Channel.attach(channel_descriptor)
-    _SHEP_RETURN_CUID = _LOCAL_SHEP_RETURN_CHANNEL.cuid
-    return dconn.Connection(inbound_initializer=_LOCAL_SHEP_RETURN_CHANNEL, policy=dp.POLICY_INFRASTRUCTURE)
+    _LOCAL_LS_RETURN_QUEUE = InfraQueue.attach(queue_descriptor)
+    _LS_RETURN_CUID = _LOCAL_LS_RETURN_QUEUE.cuid
+    return _LOCAL_LS_RETURN_QUEUE
 
 
 def _close_connections():
     with _GS_API_LOCK:
         _GS_INPUT.close()
         _GS_RETURN.close()
-        _SHEP_INPUT.close()
-        _SHEP_RETURN.close()
+        _LS_INPUT.close()
+        _LS_RETURN.close()
 
 
 def _detach_infrastructure():
     with _GS_API_LOCK:
-        if _GS_INPUT_CHANNEL is not None:
-            _GS_INPUT_CHANNEL.detach()
+        if _GS_INPUT_QUEUE is not None:
+            del _GS_INPUT_QUEUE
 
-        if _GS_RETURN_CHANNEL is not None:
-            _GS_RETURN_CHANNEL.detach()
+        if _GS_RETURN_QUEUE is not None:
+            del _GS_RETURN_QUEUE
 
-        if _LOCAL_SHEP_INPUT_CHANNEL is not None:
-            _LOCAL_SHEP_INPUT_CHANNEL.detach()
+        if _LOCAL_LS_INPUT_QUEUE is not None:
+            del _LOCAL_LS_INPUT_QUEUE
 
-        if _LOCAL_SHEP_RETURN_CHANNEL is not None:
-            _LOCAL_SHEP_RETURN_CHANNEL.detach()
+        if _LOCAL_LS_RETURN_QUEUE is not None:
+            del _LOCAL_LS_RETURN_QUEUE
 
 
 # global because of threading.
@@ -185,9 +190,6 @@ def gs_request(req_msg, *, expecting_response=True):
     # include communication with GS, and that is where the re-entering can happen.
     gc.disable()
 
-    # Serialize request message
-    req_msg_bytes = req_msg.serialize()
-
     # Ensure wake-up event is available prior to sending
     if expecting_response:
         ready = _WAKEUPS[req_msg.tag] = threading.Event()
@@ -195,7 +197,7 @@ def gs_request(req_msg, *, expecting_response=True):
     # Send request
     with _GS_SEND_LOCK:
         try:
-            _GS_INPUT.send(req_msg_bytes)
+            _GS_INPUT.put(req_msg)
         except Exception as e:
             gc.enable()
             raise e
@@ -211,7 +213,7 @@ def gs_request(req_msg, *, expecting_response=True):
             try:
                 while req_msg.tag not in _RESULTS:
                     # Receive and parse response
-                    resp = dmsg.parse(_GS_RETURN.recv())
+                    resp = _GS_RETURN.get()
 
                     try:
                         wakeup = _WAKEUPS.pop(resp.ref)
@@ -259,17 +261,17 @@ def test_connection_override(
     test_gs_input=None,
     test_gs_return=None,
     test_gs_return_cuid=None,
-    test_shep_input=None,
-    test_shep_return=None,
-    test_shep_return_cuid=None,
+    test_ls_input=None,
+    test_ls_return=None,
+    test_ls_return_cuid=None,
 ):
     global _GS_INPUT
     global _GS_RETURN
-    global _SHEP_INPUT
-    global _SHEP_RETURN
+    global _LS_INPUT
+    global _LS_RETURN
     global _INFRASTRUCTURE_CONNECTED
     global _GS_RETURN_CUID
-    global _SHEP_RETURN_CUID
+    global _LS_RETURN_CUID
 
     LOG.debug("dragon connection override")
 
@@ -288,23 +290,23 @@ def test_connection_override(
         else:
             _GS_RETURN = _connect_gs_return()
 
-        if test_shep_input is not None:
-            _SHEP_INPUT = test_shep_input
+        if test_ls_input is not None:
+            _LS_INPUT = test_ls_input
         else:
-            _SHEP_INPUT = _connect_shep_input()
+            _LS_INPUT = _connect_ls_input()
 
-        if test_shep_return is not None:
-            _SHEP_RETURN = test_shep_return
-            _SHEP_RETURN_CUID = test_shep_return_cuid
+        if test_ls_return is not None:
+            _LS_RETURN = test_ls_return
+            _LS_RETURN_CUID = test_ls_return_cuid
         else:
-            _SHEP_RETURN = _connect_shep_return()
+            _LS_RETURN = _connect_ls_return()
 
 
 def connect_to_infrastructure(force=False):
     global _GS_INPUT
     global _GS_RETURN
-    global _SHEP_INPUT
-    global _SHEP_RETURN
+    global _LS_INPUT
+    global _LS_RETURN
     global _INFRASTRUCTURE_CONNECTED
 
     # Here we register the gateway channels
@@ -323,8 +325,8 @@ def connect_to_infrastructure(force=False):
 
         _GS_INPUT = _connect_gs_input()
         _GS_RETURN = _connect_gs_return()
-        _SHEP_INPUT = _connect_shep_input()
-        _SHEP_RETURN = _connect_shep_return()
+        _LS_INPUT = _connect_ls_input()
+        _LS_RETURN = _connect_ls_return()
         _INFRASTRUCTURE_CONNECTED = True
 
         if force:
@@ -335,7 +337,7 @@ def connect_to_infrastructure(force=False):
         global _ARG_PAYLOAD
 
         # recv something from gs_return
-        handshake = dmsg.parse(_GS_RETURN.recv())
+        handshake = _GS_RETURN.get()
         LOG.debug(f"Got response {handshake}")
         assert isinstance(handshake, dmsg.GSPingProc)
 
@@ -350,7 +352,7 @@ def connect_to_infrastructure(force=False):
             # There is no race with what GS might do with the channel
             # because this process can't send any responses
             # until this message is received
-            _ARG_PAYLOAD = _GS_RETURN.recv_bytes()
+            _ARG_PAYLOAD = _GS_RETURN.get()
         else:
             raise NotImplementedError("close case")
 

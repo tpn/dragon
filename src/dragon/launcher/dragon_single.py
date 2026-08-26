@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Simple single node dragon infrastructure startup"""
+
 import time
 
 import os
@@ -8,6 +9,7 @@ import sys
 import logging
 import shutil
 import threading
+import queue
 
 import dragon.channels as dch
 
@@ -16,7 +18,6 @@ import dragon.globalservices.server as dgs
 import dragon.infrastructure.debug_support as dds
 import dragon.infrastructure.messages as dmsg
 import dragon.infrastructure.parameters as dparm
-import dragon.infrastructure.connection as dconn
 import dragon.infrastructure.util as dutil
 import dragon.infrastructure.facts as dfacts
 import dragon.infrastructure.process_desc as pdesc
@@ -24,6 +25,7 @@ import dragon.launcher.launchargs as launchargs
 import dragon.dlogging.util as dlog
 import dragon.launcher.util as dlutil
 import dragon.utils as du
+from dragon.infrastructure.queue import InfraQueue
 
 from dragon.managed_memory import DragonPoolError
 
@@ -72,8 +74,8 @@ def build_stdmsg(msg, arg_map, is_stdout=True):
 def output_monitor(la_in):
     arg_map = launchargs.get_args()  # Get args once to check decoration options
     while True:
-        msg = dmsg.parse(la_in.recv())
-        if isinstance(msg, dmsg.SHFwdOutput):
+        msg = la_in.get()
+        if isinstance(msg, dmsg.LSFwdOutput):
             if msg.fd_num == msg.FDNum.STDOUT.value:
                 msg_str = build_stdmsg(msg, arg_map, True)
                 sys.stdout.write(msg_str)
@@ -101,9 +103,9 @@ def output_monitor(la_in):
 
 
 def shutdown_monitor(la_in):
-    while la_in.poll(timeout=TIMEOUT_PATIENCE):
-        msg = dmsg.parse(la_in.recv())
-        if isinstance(msg, dmsg.SHFwdOutput):
+    try:
+        msg = la_in.get(timeout=TIMEOUT_PATIENCE)
+        if isinstance(msg, dmsg.LSFwdOutput):
             if msg.fd_num == msg.FDNum.STDOUT.value:
                 sys.stdout.write(msg.data)
                 sys.stdout.flush()
@@ -112,6 +114,8 @@ def shutdown_monitor(la_in):
                 sys.stderr.flush()
         else:
             return msg
+    except queue.Empty:
+        raise TimeoutError("timeout waiting for shutdown message")
 
     raise TimeoutError()
 
@@ -121,7 +125,7 @@ def send_log_msgs_to_py_logger(logging_queue, level: int, logging_shutdown: thre
     the single node python logger.
 
     Args:
-        my_dragon_logger (Queue): dragon.native.queue.Queue instance to read messages from
+        my_dragon_logger (Queue): dragon.infrastructure.queue.InfraQueue instance to read messages from
         level (int): minimum log priority of messages to forward
         logging_shutdown (threading.Event): event to signal shutdown of logging thread
     """
@@ -194,24 +198,21 @@ def main():
 
     try:  # ls startup
         ls_thread.start()
-        ls_stdin.send(dmsg.BENodeIdxSH(tag=dlutil.next_tag(), node_idx=0).serialize())
+        ls_stdin.send(dmsg.BENodeIdxLS(tag=dlutil.next_tag(), node_idx=0).serialize())
         be_ping = dmsg.parse(ls_stdout.recv())
-        assert isinstance(be_ping, dmsg.SHPingBE)
+        assert isinstance(be_ping, dmsg.LSPingBE)
 
-        ls_in_ch = dch.Channel.attach(du.B64.str_to_bytes(be_ping.shep_cd))
-        la_in_ch = dch.Channel.attach(du.B64.str_to_bytes(be_ping.be_cd))
-        gs_in_ch = dch.Channel.attach(du.B64.str_to_bytes(be_ping.gs_cd))
+        ls_in_wh = InfraQueue.attach(be_ping.ls_cd)
+        la_in_rh = InfraQueue.attach(be_ping.be_cd)
+        gs_in_wh = InfraQueue.attach(be_ping.gs_qd)
 
-        ls_in_wh = dconn.Connection(outbound_initializer=ls_in_ch, policy=dparm.POLICY_INFRASTRUCTURE)
-        la_in_rh = dconn.Connection(inbound_initializer=la_in_ch, policy=dparm.POLICY_INFRASTRUCTURE)
-        gs_in_wh = dconn.Connection(outbound_initializer=gs_in_ch, policy=dparm.POLICY_INFRASTRUCTURE)
-
-        ls_in_wh.send(dmsg.BEPingSH(tag=dlutil.next_tag()).serialize())
-
+        ls_in_wh.put(dmsg.BEPingLS(tag=dlutil.next_tag()))
+        log.info("Put BEPingLS")
         # Set a long timeout for DST
-        ch_up = dlutil.get_with_timeout(la_in_rh, timeout=120)
+        log.info("Started waiting for LSChannelsUp messages")
+        ch_up = dlutil.q_get_with_timeout(la_in_rh, timeout=120)
 
-        assert isinstance(ch_up, dmsg.SHChannelsUp)
+        assert isinstance(ch_up, dmsg.LSChannelsUp)
     except (AssertionError, dch.ChannelError, TimeoutError) as err:
         log.exception("ls startup")
         print(f"ls startup failed:\n{err}")
@@ -223,9 +224,9 @@ def main():
         gs_thread.start()
 
         # Set a long timeout for DST
-        gs_up = dlutil.get_with_timeout(la_in_rh, timeout=120)
+        gs_up = dlutil.q_get_with_timeout(la_in_rh, timeout=120)
         assert isinstance(gs_up, dmsg.GSIsUp)
-        gs_in_wh.send(start_msg.serialize())
+        gs_in_wh.put(start_msg)
     except (AssertionError, TimeoutError) as err:
         log.exception("gs startup")
         print(f"gs startup failed:\n{err}")
@@ -240,10 +241,10 @@ def main():
         exit_code = LAUNCHER_FAIL_EXIT
 
     try:
-        gs_in_wh.send(dmsg.GSTeardown(tag=dlutil.next_tag()).serialize())
+        gs_in_wh.put(dmsg.GSTeardown(tag=dlutil.next_tag()))
         gs_halt = shutdown_monitor(la_in_rh)
         time.sleep(TIMEOUT_YIELD)
-        ls_in_wh.send(dmsg.SHTeardown(tag=dlutil.next_tag()).serialize())
+        ls_in_wh.put(dmsg.LSTeardown(tag=dlutil.next_tag()))
         be_halt = shutdown_monitor(la_in_rh)
         time.sleep(TIMEOUT_YIELD)
         ls_stdin.send(dmsg.BEHalted(tag=dlutil.next_tag()).serialize())
@@ -252,11 +253,11 @@ def main():
         if not isinstance(gs_halt, dmsg.GSHalted):
             log.warning(f"expected GSHalted got {gs_halt}")
 
-        if not isinstance(be_halt, dmsg.SHHaltBE):
-            log.warning(f"expected SHHaltBE got {be_halt}")
+        if not isinstance(be_halt, dmsg.LSHaltBE):
+            log.warning(f"expected LSHaltBE got {be_halt}")
 
-        if not isinstance(sh_halt, dmsg.SHHalted):
-            log.warning(f"expected SHHalted got {sh_halt}")
+        if not isinstance(sh_halt, dmsg.LSHalted):
+            log.warning(f"expected LSHalted got {sh_halt}")
     except TimeoutError:
         log.exception("teardown error")
 
@@ -279,7 +280,7 @@ def main():
         try:
             logging_queue.destroy()
             logging_queue = None
-        except (Exception):
+        except Exception:
             pass
 
     dutil.compare_dev_shm(shm_status)

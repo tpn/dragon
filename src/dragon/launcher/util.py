@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import os
 from functools import wraps, partial
-from typing import Callable
+from typing import Callable, Optional
 
 from ..infrastructure.messages import AbnormalTerminationError
 from ..infrastructure import messages as dmsg
@@ -16,7 +16,9 @@ from ..infrastructure import process_desc as pdesc
 from ..utils import b64decode
 
 from .wlm import WLM, wlm_cls_dict
+from .wlm.base import BaseWLM
 
+logger = logging.getLogger(__name__)
 
 # general amount of patience we have for an expected message
 # in startup or teardown before we assume something has gone wrong
@@ -62,52 +64,69 @@ def next_tag():
     return tmp
 
 
-def detect_wlm():
-    """Detect a supported WLM"""
-    from .network_config import NetworkConfig
+def detect_wlm(wlm: Optional[str] = None) -> Optional[type[BaseWLM]]:
+    """
+    Generate a priority list of available workload managers (WLMs) on the system.
+    From that list, return a single WLM class type object with the highest priority and
+    that has an allocation (if required). If no WLMs are detected, return None to
+    indicate single-node mode.
+    """
 
-    available_wlms = []
-    try:
-        for _wlm, cls in wlm_cls_dict.items():
-            if cls.check_for_wlm_support():
-                available_wlms.append(_wlm)
-    except Exception:
-        raise RuntimeError("Error searching for supported WLM")
+    # if the user specified a workload manager, we will use that
+    retval = wlm_cls_dict[WLM.from_str(wlm)] if wlm else None
 
-    if len(available_wlms) == 0:
-        raise RuntimeError("No supported WLM found")
-    elif len(available_wlms) > 1:
-        ssh_drun = set([WLM.SSH, WLM.DRUN])
+    if not retval:
+        detected_wlm_priority_map = {}
 
-        if len(available_wlms) == 2 and ssh_drun == set(available_wlms):
-            msg = """DRun and SSH lauchers were the only supported launchers found. To select one of thse, specify `--wlm drun` or `--wlm ssh` as input to the dragon launcher.
-Both drun and ssh launch require passwordless SSH to all backend compute nodes and a list of hosts. Please see documentation
-and `dragon --help` for more information.
-"""
+        # 1. Detect which WLMs are supported on this system. check_for_wlm_support()
+        #    returns an integer priority value. 0 means not supported, 1 means supported,
+        #    and higher values indicate higher priority.
+        for wlm_cls in wlm_cls_dict.values():
+            detected_wlm_priority_map[wlm_cls] = wlm_cls.check_for_wlm_support()
+
+        # 2. Find the maximum value in the dictionary
+        max_priority = max(detected_wlm_priority_map.values(), default=0)
+        if max_priority == 0:
+            logger.info("Max priority of detected workload managers is 0. Assuming single-node mode.")
+            return None  # No supported WLMs detected, so we assume single-node mode
+
+        # 3. Get all keys that match this maximum value
+        priority_wlms = [k for k, v in detected_wlm_priority_map.items() if v == max_priority]
+
+        # If we found no WLMs, then we are in single-node mode.
+        if len(priority_wlms) == 0:
+            logger.info("No supported workload managers detected. Assuming single-node mode.")
+            return None
+
+        # Filter out any WLMs that require an allocation but don't have one.
+        priority_wlms_with_allocation: list[type[BaseWLM]] = [
+            wlm_cls for wlm_cls in priority_wlms if not wlm_cls.requires_allocation() or wlm_cls.has_allocation()
+        ]
+
+        # We found one or more WLMS, but none of them have an allocation.
+        if len(priority_wlms_with_allocation) == 0:
+            msg = (
+                "Dragon detected one or more workload managers, however, no active job allocations were found. "
+                "Please submit a job allocation to the workload manager and try again. "
+                "If you are not using a workload manager, please specify the single-node launcher with the '--single-node-override' flag. "
+                f"Detected workload managers: {', '.join(wlm_cls.name for wlm_cls in priority_wlms)}."
+            )
             raise RuntimeError(msg)
 
-        not_ssh_drun = set(available_wlms) - ssh_drun
-        if len(not_ssh_drun) == 1:
-            return list(not_ssh_drun)[0]
+        # If there are multiple WLMs with the same priority and allocation, we raise an error.
+        elif len(priority_wlms_with_allocation) > 1:
+            msg = (
+                "Dragon cannot determine the correct Workload Manager (WLM) to use. "
+                "Multiple supported WLMs were detected with the same priority: "
+                f"{', '.join(wlm_cls.name for wlm_cls in priority_wlms_with_allocation)}. "
+                "Please specify the workload manager to use with --wlm"
+            )
+            raise RuntimeError(msg)
 
-        raise RuntimeError(f"Multiple supported WLMs found: {available_wlms}. Please specify one with `--wlm <wlm>`. Please see documentation and `dragon --help` for more information.")
+        # We are left with a single WLM, so lets do Multi-Node
+        retval = priority_wlms_with_allocation[0]
 
-    elif available_wlms[0] == WLM.SSH:
-        msg = """
-SSH was only supported launcher found. To use it, specify `--wlm ssh` as input to the dragon launcher.
-It requires passwordless SSH to all backend compute nodes and a list of hosts. Please see documentation
-and `dragon --help` for more information.
-"""
-        raise RuntimeError(msg)
-    elif available_wlms[0] == WLM.DRUN:
-        msg = """
-DRun was the only supported launcher found. To use it, specify `--wlm drun` as input to the dragon launcher.
-It requires passwordless SSH to all backend compute nodes and a list of hosts. Please see documentation
-and `dragon --help` for more information.
-"""
-        raise RuntimeError(msg)
-
-    return available_wlms[0]
+    return retval
 
 
 def queue_monitor(func: Callable, *, log_test_queue=None):
@@ -206,6 +225,40 @@ def get_with_timeout(handle, timeout=TIMEOUT_PATIENCE):
 
 
 @queue_monitor
+def q_get_with_timeout(handle, timeout=TIMEOUT_PATIENCE):
+    """Function for getting messages from a queue given a timeout"""
+
+    # Handle queues we pass in either have a poll or
+    if hasattr(handle, "get"):
+        try:
+            msg = handle.get(timeout=timeout)
+            if isinstance(msg, bytes):
+                return dmsg.parse(msg)
+            else:
+                return msg
+        except queue.Empty:
+            raise TimeoutError("get_with_timeout poll operation timed out")
+    # a timeout recv. Use the appropriate one
+    elif hasattr(handle, "poll"):
+        if handle.poll(timeout=timeout):
+            msg = handle.get()
+            if isinstance(msg, bytes):
+                return dmsg.parse(msg)
+            else:
+                return msg
+        else:
+            raise TimeoutError("get_with_timeout poll operation timed out")
+    else:
+        msg = handle.recv(timeout=timeout)
+        if isinstance(msg, tuple):
+            return msg
+        elif msg is not None:
+            return dmsg.parse(msg)
+        else:
+            raise TimeoutError("get_with_timeout recv operation timed out")
+
+
+@queue_monitor
 def get_with_blocking(handle):
     """Function for getting messages from the queue while blocking"""
     try:
@@ -219,15 +272,29 @@ def get_with_blocking(handle):
         raise
 
 
+@queue_monitor
+def q_get_with_blocking(handle):
+    """Function for getting messages from the queue while blocking"""
+    msg = handle.get()
+    if isinstance(msg, tuple):
+        return msg
+    elif isinstance(msg, bytes):
+        return dmsg.parse(msg)
+    else:
+        return msg
+
+
 @no_error_queue_monitor
 def get_with_blocking_frontend_server(handle):
     """Function for getting messages from the queue while blocking"""
     try:
-        msg = handle.recv()
+        msg = handle.get()
         if isinstance(msg, tuple):
             return msg
-        else:
+        elif isinstance(msg, bytes):
             return dmsg.parse(msg)
+        else:
+            return msg
     except Exception as ex:
         raise RuntimeError("Got an error while trying to handle a message in the frontend launcher.") from ex
 
@@ -441,14 +508,14 @@ def mk_head_proc_start_msg(logbase="launcher", make_inf_channels=True, args_map=
 
 
 def mk_shproc_echo_msg(logbase="launcher", stdin_str="", node_index=0):
-    """Look at script arguments and return a SHProcessCreate message
+    """Look at script arguments and return a LSProcessCreate message
     to be used when using the transport test environment mode.
 
     If the first argument looks executable via 'which' then that will
     be what is launched as a managed process.  Otherwise sys.executable
     will be started with all the other arguments tacked on.
 
-    :return: dmsg.SHProcessCreate message
+    :return: dmsg.LSProcessCreate message
     """
     log = logging.getLogger(logbase).getChild("mk_shproc_echo_msg")
 
@@ -457,7 +524,7 @@ def mk_shproc_echo_msg(logbase="launcher", stdin_str="", node_index=0):
 
     log.info(f"The shprocesscreate message will include {exe} {args}")
 
-    return dmsg.SHProcessCreate(
+    return dmsg.LSProcessCreate(
         tag=next_tag(),
         p_uid=dfacts.LAUNCHER_PUID,
         r_c_uid=dfacts.launcher_cuid_from_index(node_index),
@@ -469,7 +536,7 @@ def mk_shproc_echo_msg(logbase="launcher", stdin_str="", node_index=0):
 
 
 def mk_shproc_start_msg(logbase="launcher", stdin_str=""):
-    """Look at script arguments and return a SHProcessCreate message
+    """Look at script arguments and return a LSProcessCreate message
     to be used when using the transport test environment mode.
 
     If the first argument looks executable via 'which' then that will
@@ -483,7 +550,7 @@ def mk_shproc_start_msg(logbase="launcher", stdin_str=""):
     exe, args = get_process_exe_args()
     log.info(f"The shprocesscreate message will include {exe} {args}")
 
-    return dmsg.SHProcessCreate(
+    return dmsg.LSProcessCreate(
         tag=next_tag(),
         p_uid=dfacts.LAUNCHER_PUID,
         r_c_uid=dfacts.BASE_BE_CUID,

@@ -6,11 +6,16 @@ from .base import WLM, BaseWLM
 from dragon.infrastructure.facts import TransportAgentOptions
 from dragon.tools.dragon_run.src import DragonRunPopen, PIPE
 from dragon.tools.dragon_run.src.wlm import WLM as DrunWLM
+from dragon.tools.dragon_run.src.facts import ENV_DRAGON_RUN_NODE_FILE
 
 from typing import Optional
 
+logger = logging.getLogger(__name__)
+
 
 class DRunWLM(BaseWLM):
+
+    name = WLM.DRUN.value
 
     def __init__(self, network_prefix, port, hostlist):
         nhosts = len(hostlist) if hostlist is not None else 0
@@ -18,12 +23,20 @@ class DRunWLM(BaseWLM):
         self.hostlist = hostlist
 
     @classmethod
-    def check_for_wlm_support(cls) -> bool:
-        return True
+    def check_for_wlm_support(cls, *args, **kwargs) -> int:
+        if cls.has_allocation():
+            logger.info("Detected Dragon Run %s in the environment.", ENV_DRAGON_RUN_NODE_FILE)
+            return 3
+        logger.info("Dragon Run was not detected")
+        return 0
 
     @classmethod
-    def check_for_allocation(cls) -> bool:
-        return True
+    def requires_allocation(cls) -> bool:
+        return False
+
+    @classmethod
+    def has_allocation(cls) -> bool:
+        return ENV_DRAGON_RUN_NODE_FILE in os.environ
 
     def _get_wlm_job_id(self) -> str:
         raise RuntimeError("DRunNetworkConfig does not implement _get_wlm_job_id")

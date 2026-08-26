@@ -2,19 +2,33 @@ import logging
 import threading
 import subprocess
 from ..launcher import util as dlutil
-from dragon.channels import Channel
+from .queue import InfraQueue
 from .messages import InfraMsg
+from ..managed_memory import MemoryPool
 
 
 class CriticalPopen(subprocess.Popen):
     """This class is used to monitor the death of a critical process. It inherits from subprocess.Popen and adds a thread that watches the process. The thread will send a notification if the process exits with a non-zero exit code. The notification is sent using a provided channel and infrastructure message. At the moment it does not work for arbitrary send and receive methods (namely stdin/stdout) or arbitrary message types."""
 
-    def __init__(self, *args, notify_channel: Channel = None, notify_msg: InfraMsg = None, name: str = "", **kwargs):
+    def __init__(
+        self,
+        *args,
+        notify_channel_sdesc: InfraQueue = None,
+        notify_channel_pool_sdesc: MemoryPool = None,
+        notify_msg: InfraMsg = None,
+        name: str = "",
+        **kwargs,
+    ):
 
         handle = super().__init__(*args, **kwargs)
-        if notify_channel is None:
-            raise RuntimeError("notify_channel must be provided")
-        self._notify_channel = notify_channel
+        if notify_channel_sdesc is None:
+            raise RuntimeError("notify_channel_sdesc must be provided")
+        if notify_channel_pool_sdesc is not None:
+            self._notify_channel_pool = MemoryPool.attach(notify_channel_pool_sdesc)
+        else:
+            self._notify_channel_pool = None
+        self._notify_channel = InfraQueue.attach(notify_channel_sdesc, mpool=self._notify_channel_pool)
+
         if notify_msg is None:
             raise RuntimeError("notify_msg must be provided")
         self._notify_msg = notify_msg
@@ -36,7 +50,7 @@ class CriticalPopen(subprocess.Popen):
     def _send_notification(self, msg: str = None):
         self.log.debug(f"Sending {self._notify_msg} with {msg}")
         try:
-            self._notify_channel.send(self._notify_msg(tag=dlutil.next_tag(), err_info=msg).serialize())
+            self._notify_channel.put(self._notify_msg(tag=dlutil.next_tag(), err_info=msg))
         except Exception as e:
             self.log.debug(f"Failed to send notification: {e}")
 
@@ -52,4 +66,7 @@ class CriticalPopen(subprocess.Popen):
             err_msg = f"Critical process exited - {self._critical_process_name} with pid {self.pid} exited with non-zero exit code {ecode}"
             self._send_notification(err_msg)
 
+        self._notify_channel.close()
+        if self._notify_channel_pool is not None:
+            self._notify_channel_pool.detach()
         self.log.info("exit")

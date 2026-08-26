@@ -73,3 +73,18 @@ Got num_workers = 2
 [stdout: p_uid=4294967296] 6144: pi= 3.1446705, error= 9.8e-04
 [stdout: p_uid=4294967296] Final value after 6342 iterations: pi=3.141595711132135, error=9.732459548770225e-07
 ```
+
+## Heat Diffusion with Python and C++
+
+The `serializable_heat` directory contains a 2D heat diffusion simulation whose
+simulation loop runs in Python while the stencil arithmetic runs in C++ worker
+processes.
+
+This example demonstrates how Dragon objects created in Python are used directly
+from C++ through the Serializable support:
+
+1. How to share array data with `XNDArray` and the C++ `SerializableNDArray`
+2. How to pass a Barrier, a Semaphore, a Queue and a Distributed Dictionary
+   between Python and C++
+
+See `serializable_heat/README.md` for details.

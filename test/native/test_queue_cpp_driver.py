@@ -5,7 +5,7 @@ from dragon.native.process import Popen
 from dragon.native.queue import Queue
 from dragon.infrastructure.facts import DRAGON_LIB_DIR
 from dragon.channels import Channel
-from dragon.utils import XNumPyVectorPickler, XNumPy2DMatrixPickler, XScalarPickler, XStringPickler, XPickler
+from dragon.utils import XVectorPickler, X2DMatrixPickler, XScalarPickler, XStringPickler, XPickler
 import multiprocessing as mp
 import pathlib
 import numpy as np
@@ -289,7 +289,7 @@ class TestQueueCPP(unittest.TestCase):
 
     def test_custom_matrix_pickler_dump(self):
         exe = "cpp_queue"
-        q = Queue(buffered=False, pickler=XNumPy2DMatrixPickler(np.float64), num_streams=1)
+        q = Queue(buffered=False, pickler=X2DMatrixPickler(np.float64), num_streams=1)
         arr = [[0.12, 0.31, 3.4], [4.579, 5.98, 6.54]]
         value = np.array(arr)
         q.put(value)
@@ -301,7 +301,7 @@ class TestQueueCPP(unittest.TestCase):
 
     def test_custom_double_vector_pickler_dump(self):
         exe = "cpp_queue"
-        q = Queue(buffered=False, pickler=XNumPyVectorPickler(np.float64), num_streams=1)
+        q = Queue(buffered=False, pickler=XVectorPickler(np.float64), num_streams=1)
         arr = [0.12, 0.31, 3.4]
         value = np.array(arr)
         q.put(value)
@@ -313,7 +313,7 @@ class TestQueueCPP(unittest.TestCase):
 
     def test_custom_matrix_pickler_load(self):
         exe = "cpp_queue"
-        q = Queue(buffered=False, pickler=XNumPy2DMatrixPickler(np.float64), num_streams=1)
+        q = Queue(buffered=False, pickler=X2DMatrixPickler(np.float64), num_streams=1)
         arr = [[0.12, 0.31, 3.4], [4.579, 5.98, 6.54]]
         ser_q = q.serialize()
         cpp_proc = Popen(executable=str(test_dir / exe), args=[ser_q, "test_custom_matrix_pickler_load"], env=ENV)
@@ -431,7 +431,7 @@ class TestQueueCPP(unittest.TestCase):
     def test_custom_matrix_dumps_loads(self):
         arr = [[0.12, 0.31, 3.4], [4.579, 5.98, 6.54]]
         value = np.array(arr)
-        pickler = XNumPy2DMatrixPickler(np.float64)
+        pickler = X2DMatrixPickler(np.float64)
         value_bytes = pickler.dumps(value)
         arr2 = pickler.loads(value_bytes)
         self.assertTrue(np.array_equal(arr, arr2))
@@ -439,7 +439,7 @@ class TestQueueCPP(unittest.TestCase):
     def test_custom_array_dumps_loads(self):
         arr = [4.579, 5.98, 6.54]
         value = np.array(arr)
-        pickler = XNumPyVectorPickler(np.float64)
+        pickler = XVectorPickler(np.float64)
         value_bytes = pickler.dumps(value)
         arr2 = pickler.loads(value_bytes)
         self.assertTrue(np.array_equal(arr, arr2))

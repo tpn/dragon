@@ -260,3 +260,31 @@ class Barrier:
         """
 
         return b64encode(self._channel.serialize())
+
+    @classmethod
+    def attach(cls, serialized: str, *, action: callable = None, timeout: float = None):
+        """Attach to a Dragon native Barrier from its serialized descriptor.
+
+        :param serialized: The serialized, base64 encoded descriptor of the barrier.
+        :type serialized: str
+        :param action: A callable to be run by the last party to arrive at the barrier.
+            An action cannot be carried in the serialized descriptor, so provide it here
+            when the attached barrier needs one.
+        :type action: callable, optional
+        :param timeout: The default timeout, in seconds, for wait operations.
+        :type timeout: float, optional
+        :return: The attached Barrier object.
+        :rtype: Barrier
+        """
+
+        if timeout is None:
+            timeout = 1000000000  # so we can do math with it.
+
+        new_barrier = cls.__new__(cls)
+        new_barrier._action = action
+        new_barrier._timeout = timeout
+        new_barrier._channel = Channel.attach(b64decode(serialized))
+        new_barrier._parties = new_barrier._channel.capacity
+        get_refcnt(new_barrier._channel.cuid)
+
+        return new_barrier

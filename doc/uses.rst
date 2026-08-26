@@ -114,9 +114,9 @@ Tutorials
             <h3>Debugging</h3>
             <p>Use Dragon logging to inspect runtime behavior and application issues</p>
         </a>
-        <a href="uses/tutorial1.html" class="tile_item">
-            <h3>Tutorial 1</h3>
-            <p>First tutorial for using Dragon</p>
+        <a href="uses/serializables.html" class="tile_item">
+            <h3>Python/C++ Integration</h3>
+            <p>Write Code in C++ that shares Data and Objects with Python</p>
         </a>
     </div>
 

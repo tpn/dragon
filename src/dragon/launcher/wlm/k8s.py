@@ -19,6 +19,8 @@ from typing import Union, Tuple, Optional
 
 class KubernetesNetworkConfig(BaseWLM):
 
+    name = WLM.K8S.value
+    
     def __init__(self, network_prefix=None, port=None, hostlist=None):
 
         try:
@@ -44,8 +46,14 @@ class KubernetesNetworkConfig(BaseWLM):
             self.namespace = f.read().strip()
 
     @classmethod
-    def check_for_wlm_support(cls) -> bool:
-        return (os.getenv("KUBERNETES_SERVICE_HOST") and os.getenv("KUBERNETES_SERVICE_PORT")) != None
+    def check_for_wlm_support(cls) -> int:
+        if (os.getenv("KUBERNETES_SERVICE_HOST", None) and os.getenv("KUBERNETES_SERVICE_PORT", None)) is not None:
+            return 1
+        return 0
+
+    @classmethod
+    def requires_allocation(cls) -> bool:
+        return False
 
     def _get_wlm_job_id(self) -> str:
         raise RuntimeError("KubernetesNetworkConfig does not implement _get_wlm_job_id")

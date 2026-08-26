@@ -1,0 +1,55 @@
+name: dragonhpc
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend.Dockerfile
+    volumes:
+      - ../..:/workspace:cached
+    # Keeps the frontend container alive
+    command: sleep infinity
+    networks:
+      dragonhpc:
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+    shm_size: 6gb
+    ulimits:
+      core:
+        soft: -1
+        hard: -1
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 8GB
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend.Dockerfile
+    volumes:
+      - ../..:/workspace:cached
+    deploy:
+      replicas: 2
+      resources:
+        limits:
+          cpus: "2"
+          memory: 8GB
+    # Run sshd in the foreground to keep the container alive and allow SSH access
+    command: ["sudo", "/usr/sbin/sshd", "-D"]
+    networks:
+      dragonhpc:
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+    shm_size: 6gb
+    ulimits:
+      core:
+        soft: -1
+        hard: -1
+
+networks:
+  dragonhpc:
+    name: dragonhpc_network

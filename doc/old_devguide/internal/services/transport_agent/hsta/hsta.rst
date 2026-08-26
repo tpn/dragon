@@ -100,7 +100,7 @@ Flow Control
 The *ejection rate* is the rate, measured in GB/s, at which data is written by the NIC into the
 user's memory. HSTA controls the ejection rate by limiting the number of pending receive
 operations based on the amount of memory required for the receive buffers. The default is to
-allow 8MB worth of pending receive buffers, but can be modified using the environment variable
+allow 64MB worth of pending receive buffers, but can be modified using the environment variable
 ``DRAGON_HSTA_MAX_EJECTION_MB``. Currently, the injection rate is not controlled, but it will be
 in future releases (using ``DRAGON_HSTA_MAX_INJECTION_MB``).
 

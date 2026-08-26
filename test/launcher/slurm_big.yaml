@@ -14,7 +14,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '1':
     accelerators: null
@@ -32,7 +32,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '10':
     accelerators: null
@@ -50,7 +50,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '11':
     accelerators: null
@@ -68,7 +68,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '12':
     accelerators: null
@@ -86,7 +86,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '13':
     accelerators: null
@@ -104,7 +104,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '14':
     accelerators: null
@@ -122,7 +122,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '15':
     accelerators: null
@@ -140,7 +140,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '2':
     accelerators: null
@@ -158,7 +158,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '3':
     accelerators: null
@@ -176,7 +176,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '4':
     accelerators: null
@@ -194,7 +194,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '5':
     accelerators: null
@@ -212,7 +212,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '6':
     accelerators: null
@@ -230,7 +230,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '7':
     accelerators: null
@@ -248,7 +248,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '8':
     accelerators: null
@@ -266,7 +266,7 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4
 '9':
     accelerators: null
@@ -284,5 +284,5 @@
     num_cpus: 0
     overlay_cd: ''
     physical_mem: 0
-    shep_cd: ''
+    ls_cd: ''
     state: 4

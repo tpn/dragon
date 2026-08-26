@@ -506,8 +506,89 @@ cpdef enum SerType:
     TY_INTMATRIX = SERTYPE_INTMATRIX
     TY_DOUBLEMATRIX = SERTYPE_DOUBLEMATRIX
     TY_BYTEBUFFER = SERTYPE_BYTEBUFFER
+    TY_DOUBLENDARRAY = SERTYPE_DOUBLENDARRAY
+    TY_FLOATNDARRAY = SERTYPE_FLOATNDARRAY
+    TY_INTNDARRAY = SERTYPE_INTNDARRAY
+    TY_LONGNDARRAY = SERTYPE_LONGNDARRAY
+    TY_QUEUE = SERTYPE_QUEUE
+    TY_DDICT = SERTYPE_DDICT
+    TY_BARRIER = SERTYPE_BARRIER
+    TY_SEMAPHORE = SERTYPE_SEMAPHORE
 
-class XNumPyVectorPickler:
+def nparray(arr):
+    if not isinstance(arr, np.ndarray):
+        arr = np.array(arr)
+
+    return arr
+
+class XNDArray(np.ndarray):
+    def __new__(cls, input_array, dd_ser:str, ndarray_key:str = None, data_type:np.dtype=None, dim:tuple(int)=None, timeout:float=None):
+        from dragon.data.ddict import DDict
+        # Add the custom attribute
+        if dd_ser is None:
+            raise ValueError("You must provide a serialized DDict for serializable ndarrays.")
+
+        dd = DDict.attach(serialized_dict=dd_ser, timeout=timeout)
+        kpickler = XStringPickler()
+        vpickler = XByteBufferPickler()
+        dd = dd.pickler(key_pickler=kpickler, value_pickler=vpickler)
+        store_needed = False
+
+        if ndarray_key is None:
+            key_tag = dd.fetch_add("dragon_serializable_ndarray")
+            ndarray_key = "DRAGON_NDARRAY_" + str(key_tag)
+            # Cast the input_array to our new class type
+            obj = np.asarray(input_array).view(cls)
+            store_needed = True
+        else:
+            data = dd[ndarray_key]
+            view = memoryview(data)
+            obj = bytearray(view)
+            # view(cls) is required so the instance attributes below can be set.
+            obj = np.frombuffer(obj, dtype=data_type).view(cls)
+
+        if dim is not None:
+            obj = obj.reshape(dim)
+
+        obj._dd_ser = dd_ser
+        obj._dd = dd
+        obj._ndarray_key = ndarray_key
+        obj._timeout = timeout
+
+        if store_needed:
+            mv = memoryview(obj)
+            bobj = mv.tobytes()
+            dd[ndarray_key] = bobj
+
+        return obj
+
+    def __array_finalize__(self, obj):
+        # Ensures attributes persist through slicing and operations
+        if obj is None: return
+        self._dd_ser = getattr(obj, "_dd_ser", None)
+        self._dd = getattr(obj, "_dd", None)
+        self._ndarray_key = getattr(obj, "_ndarray_key", None)
+        self._timeout = getattr(obj, "_timeout", None)
+
+    def sync(self):
+        mv = memoryview(self)
+        bobj = mv.tobytes()
+        self._dd[self._ndarray_key] = bobj
+
+    def refresh(self):
+        data = self._dd[self._ndarray_key]
+        arr = np.frombuffer(bytearray(memoryview(data)), dtype=self.dtype)
+        # Writes through to this instance's own buffer, leaving attributes intact.
+        np.copyto(self, arr.reshape(self.shape))
+
+    def destroy(self):
+        try:
+            del self._dd[self._ndarray_key]
+        except:
+            pass
+
+
+class XVectorPickler:
     """A Pickler that has X-language support and is compatible with the C++
     SerializableVector<Type>. Pickling a numpy array with this pickler can
     be read in C++ by deserializing using the SerializableVector<Type>.
@@ -519,7 +600,7 @@ class XNumPyVectorPickler:
 
     def __init__(self, data_type: np.dtype, type_val = TY_NONE):
         if np is None:
-            raise ModuleNotFoundError("The numpy package is required when using XNumPyVectorPickler.")
+            raise ModuleNotFoundError("The numpy package is required when using XVectorPickler.")
         self._ty_val = type_val
         self._data_type = data_type
 
@@ -537,13 +618,22 @@ class XNumPyVectorPickler:
         return size_t_size + item_size * len(nparr)
 
     def dumps(self, nparr) -> bytes:
+        # Explicitly convert input to the expected data type to avoid dtype mismatches
+        if not isinstance(nparr, np.ndarray):
+            nparr = np.array(nparr, dtype=self._data_type)
+        else:
+            nparr = nparr.astype(self._data_type)
+
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
         try:
             ncol, = nparr.shape
-        except:
+        except ValueError:
             raise ValueError("The array must be a 1-dimensional array")
 
         bytes_ncol = ncol.to_bytes(size_t_size, byteorder=sys.byteorder)
+
+        # Ensure contiguous memory layout
+        nparr = np.ascontiguousarray(nparr)
         mv = memoryview(nparr)
         bobj = mv.tobytes()
         rv = bytes_ncol
@@ -561,43 +651,62 @@ class XNumPyVectorPickler:
 
         # then grab the array
         data_size = ncol*item_size
-        data = val[idx:idx+data_size]
-        view = memoryview(data)
-        obj = bytearray(view)
-        idx+=data_size
 
-        ret_arr = np.frombuffer(obj, dtype=self._data_type).reshape((ncol,))
+        if data_size > 0:
+            data = val[idx:idx+data_size]
+            view = memoryview(data)
+            obj = bytearray(view)
+            ret_arr = np.frombuffer(obj, dtype=self._data_type).reshape((ncol,))
+        else:
+            # Handle empty array case
+            ret_arr = np.array([], dtype=self._data_type).reshape((ncol,))
+
         return ret_arr
 
     def dump(self, nparr, file) -> None:
+        # Explicitly convert input to the expected data type to avoid dtype mismatches
+        if not isinstance(nparr, np.ndarray):
+            nparr = np.array(nparr, dtype=self._data_type)
+        else:
+            nparr = nparr.astype(self._data_type)
 
         # write the dimension of the array
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
-        ncol, = nparr.shape
+        try:
+            ncol, = nparr.shape
+        except ValueError:
+            raise ValueError("The array must be a 1-dimensional array")
+
         bytes_ncol = ncol.to_bytes(size_t_size, byteorder=sys.byteorder)
         file.write(bytes_ncol)
 
+        # Ensure contiguous memory layout for memoryview
+        nparr = np.ascontiguousarray(nparr)
         mv = memoryview(nparr)
         bobj = mv.tobytes()
         file.write(bobj)
 
     def load(self, file):
-
         # read the dimension of the array
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
         ncol = int.from_bytes(file.read(size_t_size), sys.byteorder)
         item_size = np.dtype(self._data_type).itemsize
 
-        data = file.read(ncol*item_size)
-        # convert bytes to bytearray
-        view = memoryview(data)
-        obj = bytearray(view)
-
-        ret_arr = np.frombuffer(obj, dtype=self._data_type).reshape((ncol,))
+        # Read data (0 bytes for empty arrays)
+        data_size = ncol * item_size
+        if data_size > 0:
+            data = file.read(data_size)
+            # convert bytes to bytearray
+            view = memoryview(data)
+            obj = bytearray(view)
+            ret_arr = np.frombuffer(obj, dtype=self._data_type).reshape((ncol,))
+        else:
+            # Handle empty array case
+            ret_arr = np.array([], dtype=self._data_type).reshape((ncol,))
 
         return ret_arr
 
-class XNumPy2DMatrixPickler:
+class X2DMatrixPickler:
     """A Pickler that has X-language support and is compatible with the C++
     Serializable2DMatrix<Type>. Pickling a numpy array with this pickler can
     be read in C++ by deserializing using the Serializable2DMatrix<Type>.
@@ -609,10 +718,10 @@ class XNumPy2DMatrixPickler:
 
     def __init__(self, data_type: np.dtype, type_val = TY_NONE):
         if np is None:
-            raise ModuleNotFoundError("The numpy package is required when using XNumPy2DMatrixPickler.")
+            raise ModuleNotFoundError("The numpy package is required when using X2DMatrixPickler.")
         self._ty_val = type_val
         self._data_type = data_type
-        self._arr_pickler = XNumPyVectorPickler(data_type)
+        self._arr_pickler = XVectorPickler(data_type)
 
     @property
     def ty_val(self):
@@ -621,9 +730,10 @@ class XNumPy2DMatrixPickler:
     def byte_size(self, nparr):
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
         nrow, ncol = nparr.shape
-        return size_t_size + nrow * XNumPyVectorPickler.byte_size(nparr[0])
+        return size_t_size + nrow * self._arr_pickler.byte_size(nparr[0])
 
     def dumps(self, nparr) -> bytes:
+        nparr = nparray(nparr)
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
         nrow, ncol = nparr.shape
         bytes_nrow = nrow.to_bytes(size_t_size, byteorder=sys.byteorder)
@@ -644,7 +754,7 @@ class XNumPy2DMatrixPickler:
         item_size = np.dtype(self._data_type).itemsize
         total_size = len(val)
 
-        ret_arr = np.array([])
+        ret_arr = np.array([], dtype=self._data_type)
         ncol = 0
 
         for i in range(nrow):
@@ -657,6 +767,7 @@ class XNumPy2DMatrixPickler:
         return ret_arr
 
     def dump(self, nparr, file) -> None:
+        nparr = nparray(nparr)
 
         # write the dimension of the array
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
@@ -675,16 +786,11 @@ class XNumPy2DMatrixPickler:
         for i in range(nrow):
             self._arr_pickler.dump(nparr[i], file)
 
-
     def load(self, file):
-
-        obj = None
-
-        # read the dimension of the array
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
         nrow = int.from_bytes(file.read(size_t_size), sys.byteorder)
-        item_size = np.dtype(self._data_type).itemsize
-        ret_arr = np.array([])
+
+        ret_arr = np.array([], dtype=self._data_type)
         ncol = 0
 
         for i in range(nrow):
@@ -692,9 +798,141 @@ class XNumPy2DMatrixPickler:
             ncol = len(arr)
             ret_arr = np.append(ret_arr, arr)
 
-        ret_arr = ret_arr.reshape((nrow, ncol))
+        return ret_arr.reshape((nrow, ncol))
 
-        return ret_arr
+class XNDArrayPickler:
+    """A Pickler that has X-language support and is compatible with the C++
+    SerializableNDArray. Pickling a higher dimensional numpy array with this
+    pickler can be read in C++ by deserializing using the
+    SerializableNDArray. Likewise, a C++ n-dimensional array serialized with
+    SerializableNDArray can be unpickled into a numpy array was well. This is
+    meant to be an efficient implementation for passing large
+    multi-dimensional arrays to and from other languages (at present that
+    means C++) through a pickling/unpickling interface like native Queue or
+    DDict. """
+
+    def __init__(self, data_type: np.dtype, type_val = TY_NONE):
+        if np is None:
+            raise ModuleNotFoundError("The numpy package is required when using XNDArrayPickler.")
+        self._ty_val = type_val
+
+        self._vecpickler = XVectorPickler(np.dtype(ctypes.c_int))
+        self._strpickler = XStringPickler()
+        self._bufpickler = XByteBufferPickler()
+        self._intpickler = XScalarPickler(ctypes.c_int)
+        self._sizetpickler = XScalarPickler(ctypes.c_size_t)
+        self._data_type = data_type
+
+    @property
+    def ty_val(self):
+        return self._ty_val
+
+    def dumps(self, xndarray) -> bytes:
+        if not isinstance(xndarray, XNDArray):
+            raise ValueError("You must provide an XNDArray instance to the XNDArrayPickler")
+
+        # write the item/element size
+        rv = self._intpickler.dumps(xndarray.dtype.itemsize)
+
+        # write the dimension of the array
+        rv += self._vecpickler.dumps(xndarray.shape)
+
+        # write the indices which are empty when sent from Python
+        rv += self._vecpickler.dumps([])
+
+        # add the serialized ddict.
+        rv += self._strpickler.dumps(xndarray._dd_ser)
+
+        # add the ddict key for the ndarray
+        rv += self._strpickler.dumps(xndarray._ndarray_key)
+
+        if xndarray._timeout is None:
+            tv_sec = -1
+            tv_nsec = -1
+        else:
+            tv_sec = int(xndarray._timeout)
+            tv_nsec = int((xndarray._timeout - tv_sec) * 1E9)
+
+        # add the seconds and ns for timeout
+        rv += self._intpickler.dumps(tv_sec)
+        rv += self._intpickler.dumps(tv_nsec)
+
+        return rv
+
+    def loads(self, val):
+        item_size = self._intpickler.loads(val)
+        idx = self._intpickler.byte_size(item_size)
+
+        dimensions = self._vecpickler.loads(val[idx:])
+        idx += self._vecpickler.byte_size(dimensions)
+
+        indices = self._vecpickler.loads(val[idx:])
+        idx += self._vecpickler.byte_size(indices)
+
+        dd_ser = self._strpickler.loads(val[idx:])
+        idx += self._strpickler.byte_size(dd_ser)
+
+        ndarray_key = self._strpickler.loads(val[idx:])
+        idx += self._strpickler.byte_size(ndarray_key)
+
+        secs = self._intpickler.loads(val[idx:])
+        idx += self._intpickler.byte_size(secs)
+
+        nsecs = self._intpickler.loads(val[idx:])
+        idx += self._intpickler.byte_size(nsecs)
+
+        if secs == -1:
+            timeout = None
+        else:
+            timeout = secs + (nsecs / 1.0E9)
+
+        return XNDArray([], dd_ser, ndarray_key, self._data_type, dimensions, timeout)
+
+    def dump(self, xndarray, file) -> None:
+        if not isinstance(xndarray, XNDArray):
+            raise ValueError("You must provide an XNDArray instance to the XNDArrayPickler")
+
+        # write the item/element size
+        self._intpickler.dump(file, xndarray.dtype.itemsize)
+
+        # write the dimension of the array
+        self._vecpickler.dump(file, xndarray.shape)
+
+        # write the indices which are empty when sent from Python
+        self._vecpickler.dump(file, [])
+
+        # add the serialized ddict.
+        self._strpickler.dump(file, xndarray._dd_ser)
+
+        # add the ddict key for the ndarray
+        self._strpickler.dump(file, xndarray._ndarray_key)
+
+        if xndarray._timeout is None:
+            tv_sec = -1
+            tv_nsec = -1
+        else:
+            tv_sec = int(xndarray._timeout)
+            tv_nsec = int((xndarray._timeout - tv_sec) * 1E9)
+
+        # add the seconds and ns for timeout
+        self._intpickler.dump(file, tv_sec)
+        self._intpickler.dump(file, tv_nsec)
+
+    def load(self, file):
+        item_size = self._intpickler.load(file)
+        dimensions = self._vecpickler.load(file)
+        indices = self._vecpickler.load(file)
+        dd_ser = self._strpickler.load(file)
+        ndarray_key = self._strpickler.load(file)
+        secs = self._intpickler.load(file)
+        nsecs = self._intpickler.load(file)
+
+        if secs == -1:
+            timeout = None
+        else:
+            timeout = secs + (nsecs / 1.0E9)
+
+        return XNDArray([], dd_ser, ndarray_key, self._data_type, dimensions, timeout)
 
 class XByteBufferPickler:
     """A Pickler that has X-language support and is compatible with the C++
@@ -783,12 +1021,11 @@ class XScalarPickler:
         return self._num_bytes
 
     def dumps(self, val) -> bytes:
-        val = self._data_type(val)
-        return val.tobytes()
+        return np.array(val, dtype=np.dtype(self._data_type)).tobytes()
 
     def loads(self, val: bytes) -> object:
         try:
-            return np.frombuffer(val, dtype=self._data_type)[0].item()
+            return np.frombuffer(val[:self._num_bytes], dtype=self._data_type)[0].item()
         except Exception as ex:
             raise ValueError(f"The value {val} was not decodable as a scalar of type {self._data_type}")
 
@@ -816,20 +1053,19 @@ class XStringPickler:
 
     def byte_size(self, val):
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
-        strlen = len(val)
+        strlen = len(val.encode())
         return size_t_size + strlen
 
     def dumps(self, val) -> bytes:
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
-        strlen = len(val)
-        strlenbytes = strlen.to_bytes(size_t_size, byteorder=sys.byteorder)
         valbytes = val.encode()
+        strlenbytes = len(valbytes).to_bytes(size_t_size, byteorder=sys.byteorder)
         return strlenbytes + valbytes
 
     def loads(self, val: bytes) -> str:
         size_t_size = ctypes.sizeof(ctypes.c_size_t)
-        # unused: strlen = int.from_bytes(val[:size_t_size], sys.byteorder)
-        rv = val[size_t_size:].decode('utf-8')
+        strlen = int.from_bytes(val[:size_t_size], sys.byteorder)
+        rv = val[size_t_size:size_t_size+strlen].decode('utf-8')
         return rv
 
     def dump(self, val, file) -> None:
@@ -842,6 +1078,196 @@ class XStringPickler:
         rv = val.decode('utf-8')
         return rv
 
+class XQueuePickler:
+    """A Pickler that has X-language support and is compatible with the C++
+    SerializableQueue. Pickling a Dragon native Queue with this pickler can be
+    read in C++ by deserializing using the SerializableQueue class. Likewise, a
+    C++ Queue serialized with SerializableQueue can be unpickled into a Dragon
+    native Queue as well. Only the serialized descriptor of the Queue is
+    transferred, so the lifetime of the Queue is still managed by whoever
+    created it. """
+
+    def __init__(self, pickler=None):
+        """
+        :param pickler: The pickler given to the Queue that is created when a
+        Queue descriptor is unpickled. An XPickler is used when one is not
+        provided so the unpickled Queue can continue to talk to other languages.
+        """
+        self._pickler = pickler
+        self._strpickler = XStringPickler()
+
+    @property
+    def ty_val(self):
+        return TY_QUEUE
+
+    def _attach(self, serialized):
+        # Imported here because dragon.native.queue depends on this module.
+        from dragon.native.queue import Queue
+
+        pickler = self._pickler
+        if pickler is None:
+            pickler = XPickler()
+
+        return Queue.attach(serialized, pickler=pickler)
+
+    def byte_size(self, val) -> int:
+        return self._strpickler.byte_size(val.serialize())
+
+    def dumps(self, val) -> bytes:
+        return self._strpickler.dumps(val.serialize())
+
+    def loads(self, val: bytes):
+        return self._attach(self._strpickler.loads(val))
+
+    def dump(self, val, file) -> None:
+        self._strpickler.dump(val.serialize(), file)
+
+    def load(self, file):
+        return self._attach(self._strpickler.load(file))
+
+class XDDictPickler:
+    """A Pickler that has X-language support and is compatible with the C++
+    SerializableDDict. Pickling a Distributed Dictionary with this pickler can
+    be read in C++ by deserializing using the SerializableDDict class.
+    Likewise, a C++ DDict serialized with SerializableDDict can be unpickled
+    into a Python DDict as well. Only the serialized descriptor of the DDict is
+    transferred, so the lifetime of the DDict is still managed by whoever
+    created it. """
+
+    def __init__(self, key_pickler=None, value_pickler=None, timeout:float=None):
+        """
+        :param key_pickler: The key pickler given to the DDict that is created
+        when a DDict descriptor is unpickled. An XPickler is used when one is
+        not provided so the unpickled DDict can continue to talk to other
+        languages.
+
+        :param value_pickler: The value pickler for the unpickled DDict. An
+        XPickler is used when one is not provided.
+
+        :param timeout: The timeout applied to operations on the unpickled DDict.
+        """
+        self._key_pickler = key_pickler
+        self._value_pickler = value_pickler
+        self._timeout = timeout
+        self._strpickler = XStringPickler()
+
+    @property
+    def ty_val(self):
+        return TY_DDICT
+
+    def _attach(self, serialized):
+        # Imported here because dragon.data.ddict depends on this module.
+        from dragon.data.ddict.ddict import DDict
+
+        key_pickler = self._key_pickler
+        if key_pickler is None:
+            key_pickler = XPickler()
+
+        value_pickler = self._value_pickler
+        if value_pickler is None:
+            value_pickler = XPickler()
+
+        dd = DDict.attach(serialized, timeout=self._timeout)
+        return dd.pickler(key_pickler=key_pickler, value_pickler=value_pickler)
+
+    def byte_size(self, val) -> int:
+        return self._strpickler.byte_size(val.serialize())
+
+    def dumps(self, val) -> bytes:
+        return self._strpickler.dumps(val.serialize())
+
+    def loads(self, val: bytes):
+        return self._attach(self._strpickler.loads(val))
+
+    def dump(self, val, file) -> None:
+        self._strpickler.dump(val.serialize(), file)
+
+    def load(self, file):
+        return self._attach(self._strpickler.load(file))
+
+class XBarrierPickler:
+    """A Pickler that has X-language support and is compatible with the C++
+    SerializableBarrier. Pickling a Dragon native Barrier with this pickler can
+    be read in C++ by deserializing using the SerializableBarrier class.
+    Likewise, a C++ Barrier serialized with SerializableBarrier can be
+    unpickled into a Dragon native Barrier as well. Only the serialized
+    descriptor of the Barrier is transferred, so the lifetime of the Barrier is
+    still managed by whoever created it. """
+
+    def __init__(self, action=None, timeout:float=None):
+        """
+        :param action: The action given to the Barrier that is created when a
+        Barrier descriptor is unpickled. An action cannot be carried in the
+        descriptor so provide it here when the unpickled Barrier needs one.
+
+        :param timeout: The default timeout for waits on the unpickled Barrier.
+        """
+        self._action = action
+        self._timeout = timeout
+        self._strpickler = XStringPickler()
+
+    @property
+    def ty_val(self):
+        return TY_BARRIER
+
+    def _attach(self, serialized):
+        # Imported here because dragon.native.barrier depends on this module.
+        from dragon.native.barrier import Barrier
+
+        return Barrier.attach(serialized, action=self._action, timeout=self._timeout)
+
+    def byte_size(self, val) -> int:
+        return self._strpickler.byte_size(val.serialize())
+
+    def dumps(self, val) -> bytes:
+        return self._strpickler.dumps(val.serialize())
+
+    def loads(self, val: bytes):
+        return self._attach(self._strpickler.loads(val))
+
+    def dump(self, val, file) -> None:
+        self._strpickler.dump(val.serialize(), file)
+
+    def load(self, file):
+        return self._attach(self._strpickler.load(file))
+
+class XSemaphorePickler:
+    """A Pickler that has X-language support and is compatible with the C++
+    SerializableSemaphore. Pickling a Dragon native Semaphore with this pickler
+    can be read in C++ by deserializing using the SerializableSemaphore class.
+    Likewise, a C++ Semaphore serialized with SerializableSemaphore can be
+    unpickled into a Dragon native Semaphore as well. Only the serialized
+    descriptor of the Semaphore is transferred, so the lifetime of the
+    Semaphore is still managed by whoever created it. """
+
+    def __init__(self):
+        self._strpickler = XStringPickler()
+
+    @property
+    def ty_val(self):
+        return TY_SEMAPHORE
+
+    def _attach(self, serialized):
+        # Imported here because dragon.native.semaphore depends on this module.
+        from dragon.native.semaphore import Semaphore
+
+        return Semaphore.attach(serialized)
+
+    def byte_size(self, val) -> int:
+        return self._strpickler.byte_size(val.serialize())
+
+    def dumps(self, val) -> bytes:
+        return self._strpickler.dumps(val.serialize())
+
+    def loads(self, val: bytes):
+        return self._attach(self._strpickler.loads(val))
+
+    def dump(self, val, file) -> None:
+        self._strpickler.dump(val.serialize(), file)
+
+    def load(self, file):
+        return self._attach(self._strpickler.load(file))
+
 class XPickler:
     """A Pickler that has X-language support and is compatible with the C++
     Serializables. Objects to be shared between Python and C++ must be supported
@@ -851,19 +1277,31 @@ class XPickler:
     Serializable object can be unpickled into its corresponding Python object,
     enabling cross communication between Python and other languages (at
     present that means C++) through a pickling/unpickling interface like
-    native Queue or DDict. """
+    native Queue or DDict. if only_ndarrays is True, then all vectors and
+    matrices are treated and handled as ndarrays by the library which
+    means their data will be stored in a Distributed Dictionary and only
+    meta-data will be passed serialized/deserialized."""
 
-    def __init__(self):
+    def __init__(self, only_ndarrays:bool=False):
+        self._only_ndarrays = only_ndarrays
         self._str_pickler = XStringPickler()
         if np is None:
             raise ModuleNotFoundError("The numpy package is required when using XPickler.")
         self._int_pickler = XScalarPickler(np.int32, TY_INT)
         self._double_pickler = XScalarPickler(np.float64, TY_DOUBLE)
-        self._intvector_pickler = XNumPyVectorPickler(np.int32, TY_INTVECTOR)
-        self._doublevector_pickler = XNumPyVectorPickler(np.float64, TY_DOUBLEVECTOR)
-        self._intmatrix_pickler = XNumPy2DMatrixPickler(np.int32, TY_INTMATRIX)
-        self._doublematrix_pickler = XNumPy2DMatrixPickler(np.float64, TY_DOUBLEMATRIX)
+        self._intvector_pickler = XVectorPickler(np.int32, TY_INTVECTOR)
+        self._doublevector_pickler = XVectorPickler(np.float64, TY_DOUBLEVECTOR)
+        self._intmatrix_pickler = X2DMatrixPickler(np.int32, TY_INTMATRIX)
+        self._doublematrix_pickler = X2DMatrixPickler(np.float64, TY_DOUBLEMATRIX)
         self._bytebuffer_pickler = XByteBufferPickler()
+        self._double_ndarray_pickler = XNDArrayPickler(np.float64, TY_DOUBLENDARRAY)
+        self._float_ndarray_pickler = XNDArrayPickler(np.float32, TY_FLOATNDARRAY)
+        self._int_ndarray_pickler = XNDArrayPickler(np.int32, TY_INTNDARRAY)
+        self._long_ndarray_pickler = XNDArrayPickler(np.long, TY_LONGNDARRAY)
+        self._queue_pickler = XQueuePickler()
+        self._ddict_pickler = XDDictPickler()
+        self._barrier_pickler = XBarrierPickler()
+        self._semaphore_pickler = XSemaphorePickler()
 
         self._ty_pickler = {
             TY_STR: self._str_pickler,
@@ -873,9 +1311,16 @@ class XPickler:
             TY_DOUBLEVECTOR: self._doublevector_pickler,
             TY_INTMATRIX: self._intmatrix_pickler,
             TY_DOUBLEMATRIX: self._doublematrix_pickler,
-            TY_BYTEBUFFER: self._bytebuffer_pickler
+            TY_BYTEBUFFER: self._bytebuffer_pickler,
+            TY_DOUBLENDARRAY: self._double_ndarray_pickler,
+            TY_FLOATNDARRAY: self._float_ndarray_pickler,
+            TY_INTNDARRAY: self._int_ndarray_pickler,
+            TY_LONGNDARRAY: self._long_ndarray_pickler,
+            TY_QUEUE: self._queue_pickler,
+            TY_DDICT: self._ddict_pickler,
+            TY_BARRIER: self._barrier_pickler,
+            TY_SEMAPHORE: self._semaphore_pickler
         }
-
 
     def choose_pickler(self, val):
         if isinstance(val, str):
@@ -891,19 +1336,57 @@ class XPickler:
             return self._bytebuffer_pickler
 
         if isinstance(val, np.ndarray):
-            if isinstance(val[0], int):
-                return self._intvector_pickler
+            if not self._only_ndarrays and not isinstance(val, XNDArray):
+                # numpy scalars are not Python ints, so dispatch on dtype/rank instead.
+                if val.ndim == 1:
+                    if np.issubdtype(val.dtype, np.integer):
+                        return self._intvector_pickler
 
-            if isinstance(val[0], float):
-                return self._doublevector_pickler
+                    if np.issubdtype(val.dtype, np.floating):
+                        return self._doublevector_pickler
 
-            if isinstance(val[0], np.ndarray):
-                if isinstance(val[0][0], int):
-                    return self._intmatrix_pickler
+                elif val.ndim == 2:
+                    if np.issubdtype(val.dtype, np.integer):
+                        return self._intmatrix_pickler
 
-                if isinstance(val[0][0], float):
-                    return self._doublematrix_pickler
+                    if np.issubdtype(val.dtype, np.floating):
+                        return self._doublematrix_pickler
 
+            if val.dtype == np.dtype('double'):
+                return self._double_ndarray_pickler
+
+            if val.dtype == np.dtype('float32'):
+                return self._float_ndarray_pickler
+
+            if val.dtype == np.dtype('int32'):
+                return self._int_ndarray_pickler
+
+            if val.dtype == np.dtype('int64'):
+                return self._long_ndarray_pickler
+
+        # Imported here because dragon.native.queue depends on this module.
+        from dragon.native.queue import Queue
+
+        if isinstance(val, Queue):
+            return self._queue_pickler
+
+        # Imported here because dragon.data.ddict depends on this module.
+        from dragon.data.ddict.ddict import DDict
+
+        if isinstance(val, DDict):
+            return self._ddict_pickler
+
+        # Imported here because dragon.native.barrier depends on this module.
+        from dragon.native.barrier import Barrier
+
+        if isinstance(val, Barrier):
+            return self._barrier_pickler
+
+        # Imported here because dragon.native.semaphore depends on this module.
+        from dragon.native.semaphore import Semaphore
+
+        if isinstance(val, Semaphore):
+            return self._semaphore_pickler
 
         raise ValueError(f"Value {val} of unknown type {type(val)} cannot be pickled by XPickler.")
 

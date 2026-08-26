@@ -6,7 +6,7 @@ from dragon.data.ddict.ddict import DDict, PosixCheckpointPersister
 from dragon.native.machine import System, Node
 from dragon.infrastructure.policy import Policy
 from dragon.infrastructure.facts import DRAGON_LIB_DIR
-from dragon.utils import XNumPy2DMatrixPickler, XScalarPickler, XPickler
+from dragon.utils import X2DMatrixPickler, XScalarPickler, XPickler
 import multiprocessing as mp
 import pathlib
 import numpy as np

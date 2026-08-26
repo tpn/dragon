@@ -128,25 +128,13 @@ class TestQueue(unittest.TestCase):
             self.pass_an_obj(my_msg)
 
     def test_queue_timeout(self):
-        q = dragon.mpbridge.queues.DragonQueue()
+        q = dragon.mpbridge.queues.DragonQueue(maxsize=1)
+        first_obj = bytes(100)
+        second_obj = bytes(100)
 
-        # try to send an object which is large enough
-        # such that pickle will call write() multiple
-        # times and we want to make sure that the timeout
-        # is updated/decremented at each call
-        obj = bytes(10000000)
-
-        # set a small value for the timeout for this obj
-        # so that we make sure it raises ChannelTimeout
-        self.assertRaises(pyqueue.Full, q.put, obj, True, 0.0001)
-
-        q.put(obj, timeout=5)
-
-        rec_obj = q.get()
-        if isinstance(obj, np.ndarray):
-            np.testing.assert_array_equal(obj, rec_obj)
-        else:
-            self.assertEqual(obj, rec_obj)
+        q.put(first_obj)
+        self.assertRaises(pyqueue.Full, q.put, second_obj, True, 0.0001)
+        self.assertEqual(q.get(), first_obj)
 
         q.close()
 

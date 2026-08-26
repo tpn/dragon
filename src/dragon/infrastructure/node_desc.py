@@ -61,7 +61,7 @@ class NodeDescriptor:
         physical_mem: int = 0,
         is_primary: bool = False,
         host_id: int = None,
-        shep_cd: str = "",
+        ls_cd: str = "",
         overlay_cd: str = "",
         host_name: str = "",
         cpu_devices: Optional[list[int]] = None,
@@ -76,7 +76,7 @@ class NodeDescriptor:
         self.is_primary = is_primary
 
         self.host_name = host_name
-        self.shep_cd = shep_cd
+        self.ls_cd = ls_cd
         self.overlay_cd = overlay_cd
         self.host_id = host_id
         self.cpu_devices = cpu_devices
@@ -117,11 +117,11 @@ class NodeDescriptor:
         host_id: Optional[int] = None,
         is_primary: bool = False,
         ip_addrs: Optional[list[str]] = None,
-        shep_cd: Optional[str] = None,
+        ls_cd: Optional[str] = None,
         cpu_devices: Optional[list[int]] = None,
         accelerators: Optional[AcceleratorDescriptor] = None,
     ):
-        """Return a NodeDescriptor object for Local Services to pass into its SHChannelsUp message
+        """Return a NodeDescriptor object for Local Services to pass into its LSChannelsUp message
 
         Populates the values in a NodeDescriptor object that Local Services needs to provide to the
         launcher frontend as part of infrastructure bring-up
@@ -137,8 +137,8 @@ class NodeDescriptor:
         :type is_primary: bool, optional
         :param ip_addrs: IP addresses used for backend messaging by transport agents, defaults to ["127.0.0.1"]
         :type ip_addrs: Optional[list[str]], optional
-        :param shep_cd: Channel descriptor for this node's Local Services, defaults to None
-        :type shep_cd: Optional[str], optional
+        :param ls_cd: Channel descriptor for this node's Local Services, defaults to None
+        :type ls_cd: Optional[str], optional
         :param cpu_devices: List of CPUs and IDs on this node, defaults to list(os.sched_getaffinity(0))
         :type cpu_devices: Optional[list[int]], optional
         :param accelerators: List of any accelerators available on this node, defaults to find_accelerators()
@@ -171,8 +171,8 @@ class NodeDescriptor:
         if name is None:
             name = f"Node-{host_id}"
 
-        if shep_cd is None:
-            shep_cd = dparms.this_process.local_shep_cd
+        if ls_cd is None:
+            ls_cd = dparms.this_process.local_ls_qd
 
         num_cpus = os.cpu_count()
         physical_mem = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
@@ -187,7 +187,7 @@ class NodeDescriptor:
             host_name=host_name,
             ip_addrs=ip_addrs,
             host_id=host_id,
-            shep_cd=shep_cd,
+            ls_cd=ls_cd,
             is_primary=is_primary,
             num_cpus=num_cpus,
             physical_mem=physical_mem,
@@ -355,7 +355,7 @@ class NodeDescriptor:
             "host_id": self.host_id,
             "num_cpus": self.num_cpus,
             "physical_mem": self.physical_mem,
-            "shep_cd": self.shep_cd,
+            "ls_cd": self.ls_cd,
             "overlay_cd": self.overlay_cd,
             "cpu_devices": self.cpu_devices,
             "state": self.state.value,

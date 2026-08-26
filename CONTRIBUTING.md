@@ -149,17 +149,25 @@ bar item, and select your Dragon project folder. VS Code automatically builds
 the container image and runs it based on the configuration in
 .devcontainer/devcontainer.json.
 
-The dev container image (see .devcontainer/Dockerfile) is based on Ubuntu and
-does not include any Cray-specific repositories or packages. However, it
-includes appropriate versions of required tools to build and test Dragon as well
-as the documentation. In particular, Python is built from source using [pyenv],
-and it's source is available in /usr/local/src.
+Dragon provides two different development containers; a single node version and
+a multi-node version. The container images used in both the single and multi-node
+versions are Ubuntu based and do not include any Cray-specific repositories or packages.
+However, they do include appropriate versions of required tools to build and test
+Dragon as well as the documentation. In particular, Python is built from source
+using [pyenv], and it's source is available in /usr/local/src.
+
+The multi-node development environment consists of a single "frontend" container and
+multiple (default is 2) "backend" containers connected through docker. Each container
+shares and mounts the local directory where the Dragon source code lives. After
+building Dragon in the frontend container, you can run Dragon in multi-node mode across
+the multiple backend containers. In this configuration, Dragon uses the Dragon Run WLM
+and passwordless SSH using a well-known SSH key pair.
 
 > Note that VS Code is not required to build the image, but it is recommended.
 > To build using Docker directly, e.g.:
 >
 > ```
-> $ docker build -t dragon-dev .devcontainer
+> $ docker build -t dragon-dev .devcontainer/single-node
 > ```
 >
 > As long as the cache is used when building the image, it will result in the

@@ -2,6 +2,7 @@
 #include <dragon/exceptions.hpp>
 #include <dragon/utils.h>
 #include <functional>
+#include <utility>
 
 namespace dragon {
 
@@ -55,6 +56,15 @@ Barrier::Barrier(const char* serialized_barrier, action_func action = nullptr) {
         throw DragonError(err, "Could not get the capacity of the channel.");
 }
 
+
+Barrier::Barrier(const Barrier& other): Barrier(other.mSerBarrierChannel.c_str(), other.mAction) {}
+
+Barrier::Barrier(Barrier&& other) noexcept: mInternallyManaged(other.mInternallyManaged),
+    mBarrierChannel(other.mBarrierChannel), mSerBarrierChannel(std::move(other.mSerBarrierChannel)),
+    mAction(other.mAction), mParties(other.mParties) {
+
+    other.mInternallyManaged = false;
+}
 
 Barrier::~Barrier() {
     if (mInternallyManaged) {

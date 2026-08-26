@@ -16,5 +16,6 @@ orchestration on HPC clusters.
     ai-in-the-loop.rst
     ai_inference/index
     ai_agent/index
+    langgraph/index
     dict_torch_dataset.rst
     dna_rna_dataloader.rst

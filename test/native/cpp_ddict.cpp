@@ -46,7 +46,7 @@ dragonError_t test_put_and_get(const char * ddict_ser) {
     dd[x] = y;
     SerializableInt z = dd[x];
 
-    assert (z.getVal() == 42);
+    assert (z.val() == 42);
 
     return DRAGON_SUCCESS;
 }
@@ -58,7 +58,7 @@ dragonError_t test_pput(const char * ddict_ser) {
     DDict<Serializable, Serializable> dd(ddict_ser, &TIMEOUT);
     dd.pput(x, y);
     SerializableInt z = dd[x];
-    assert (z.getVal() == 42);
+    assert (z.val() == 42);
 
     return DRAGON_SUCCESS;
 }
@@ -91,7 +91,7 @@ dragonError_t test_erase_existing_key(const char * ddict_ser) {
     dd[x] = y;
 
     SerializableInt delted_val = dd.erase(x);
-    assert (delted_val.getVal() == y.getVal());
+    assert (delted_val.val() == y.val());
     assert (!dd.contains(x));
 
     return DRAGON_SUCCESS;
@@ -132,7 +132,7 @@ dragonError_t test_keys(const char * ddict_ser) {
     bool got7 = false;
 
     for (int i=0; i<dd_keys.size() ; i++) {
-        int val = dd_keys[i].getVal();
+        int val = dd_keys[i].val();
 
         got6 = got6 || (val == 6);
         got7 = got7 || (val == 7);
@@ -242,8 +242,8 @@ dragonError_t test_local_keys(const char * ddict_ser) {
     bool found_key1 = false;
     bool found_key0 = false;
     for (auto key: local_keys) {
-        found_key1 |= key1.getVal() == key.getVal();
-        found_key0 |= key0.getVal() == key.getVal();
+        found_key1 |= key1.val() == key.val();
+        found_key0 |= key0.val() == key.val();
     }
     assert(found_key1 && found_key0);
     return DRAGON_SUCCESS;
@@ -263,31 +263,31 @@ dragonError_t test_clone(const char * ddict_ser, std::vector<std::string>& ser_d
 dragonError_t test_copy_init(const char * ddict_ser) {
     /* This tests various assignment convenience constructors. */
     SerializableInt x = 6;
-    assert(x.getVal() == 6);
+    assert(x.val() == 6);
 
     SerializableDouble f = 6.3;
 
     Serializable y = 6;
     SerializableInt z = y;
-    assert(z.getVal() == 6);
+    assert(z.val() == 6);
     int my_i = y;
     assert(my_i == 6);
 
     Serializable d = 6.0;
     SerializableDouble e = d;
-    assert(e.getVal() == 6.0);
+    assert(e.val() == 6.0);
     double my_d = d;
     assert(my_d == 6.0);
 
     Serializable s = "Hello World";
     SerializableString t = s;
-    assert(t.getVal() == "Hello World");
+    assert(t.val() == "Hello World");
     std::string my_s = s;
     assert(my_s == "Hello World");
 
     Serializable v = {0.2, 3.14, 4.0};
     SerializableDoubleVector w = v;
-    auto wvals = w.getVal();
+    auto wvals = w.val();
     assert(wvals.size() == 3);
     assert(wvals[0] == 0.2);
     assert(wvals[1] == 3.14);
@@ -307,7 +307,7 @@ dragonError_t test_copy_init(const char * ddict_ser) {
 
     Serializable m = {{1.2, 3.4}, {2.2, 4.2}};
     Serializable2DDoubleMatrix n = m;
-    auto nvals = n.getVal();
+    auto nvals = n.val();
     assert(nvals.size() == 2);
     assert(nvals[0].size() == 2);
     assert(nvals[1].size() == 2);
@@ -350,9 +350,9 @@ dragonError_t test_fetch_add(const char * ddict_ser) {
     DDict<Serializable, Serializable> dd(ddict_ser, &TIMEOUT);
     SerializableString key("Hello");
     SerializableInt x = dd.fetch_add(key, 1);
-    assert (x.getVal() == 0);
+    assert (x.val() == 0);
     SerializableInt y = dd.fetch_add(key, 1);
-    assert (y.getVal() == 1);
+    assert (y.val() == 1);
     return DRAGON_SUCCESS;
 }
 
@@ -364,7 +364,7 @@ dragonError_t test_fetch_add_init(const char * ddict_ser) {
     SerializableInt x = dd.fetch_add(key, 2);
     assert (x == 40);
     SerializableInt y = dd.fetch_add(key, 3);
-    assert (y.getVal() == 42);
+    assert (y.val() == 42);
     return DRAGON_SUCCESS;
 }
 
@@ -374,7 +374,7 @@ dragonError_t test_fetch_add_init_2(const char * ddict_ser) {
     Serializable x = dd.fetch_add(key, 2);
     assert (x == 40);
     SerializableInt y = dd.fetch_add(key, 3);
-    assert (y.getVal() == 42);
+    assert (y.val() == 42);
     return DRAGON_SUCCESS;
 }
 
@@ -432,7 +432,7 @@ dragonError_t test_read_np_arr(const char * ddict_ser) {
     // The dimension of the array is baked into the deserialize function of the class Serializable2DDoubleMatrix in this example.
     // While deserializing the data, user is expected to understand the dimension to reform the array.
     Serializable2DDoubleMatrix ser_vals_from_py = dd[key_from_py];
-    auto vals_from_py = ser_vals_from_py.getVal();
+    auto vals_from_py = ser_vals_from_py.val();
 
     std::vector<std::vector<double>> expected_vals_from_py = {{0.12, 0.31, 3.4}, {4.579, 5.98, 6.54}};
 
@@ -489,11 +489,11 @@ dragonError_t test_batch_put(const char * ddict_ser) {
     dd.end_batch_put();
 
     SerializableInt received_val = dd[key1];
-    assert(received_val.getVal() == val.getVal());
+    assert(received_val.val() == val.val());
     received_val = dd[key2];
-    assert(received_val.getVal() == val.getVal());
+    assert(received_val.val() == val.val());
     received_val = dd[key3];
-    assert(received_val.getVal() == val.getVal());
+    assert(received_val.val() == val.val());
 
     return DRAGON_SUCCESS;
 }
@@ -513,11 +513,11 @@ dragonError_t test_bput_bget(const char * ddict_ser, uint64_t num_managers) {
     for (uint64_t i=0 ; i<num_managers ; i++) {
         DDict<Serializable, Serializable> dselect = dd.manager(i);
         SerializableInt received_val = dselect.bget(key1);
-        assert(received_val.getVal() == val.getVal());
+        assert(received_val.val() == val.val());
         received_val = dselect.bget(key2);
-        assert(received_val.getVal() == val.getVal());
+        assert(received_val.val() == val.val());
         received_val = dselect.bget(key3);
-        assert(received_val.getVal() == val.getVal());
+        assert(received_val.val() == val.val());
     }
 
     return DRAGON_SUCCESS;
@@ -540,11 +540,11 @@ dragonError_t test_bput_batch(const char * ddict_ser, uint64_t num_managers) {
     for (uint64_t i=0 ; i<num_managers ; i++) {
         DDict<Serializable, Serializable> dselect = dd.manager(i);
         SerializableInt received_val = dselect[key1];
-        assert(received_val.getVal() == val.getVal());
+        assert(received_val.val() == val.val());
         received_val = dselect[key2];
-        assert(received_val.getVal() == val.getVal());
+        assert(received_val.val() == val.val());
         received_val = dselect[key3];
-        assert(received_val.getVal() == val.getVal());
+        assert(received_val.val() == val.val());
     }
     return DRAGON_SUCCESS;
 }
@@ -574,7 +574,7 @@ dragonError_t test_bput_multiple_batch(const char * ddict_ser, uint64_t num_mana
                 SerializableString key(s);
                 SerializableInt val(j_batch*10+j);
                 SerializableInt received_val = dselect.bget(key);
-                assert(received_val.getVal() == val.getVal());
+                assert(received_val.val() == val.val());
             }
         }
     }
@@ -600,7 +600,7 @@ dragonError_t test_advance(const char * ddict_ser) {
         uint64_t chkptID = dd.checkpoint_id();
         assert(chkptID == i);
         SerializableInt val = dd[key];
-        assert(val.getVal() == i);
+        assert(val.val() == i);
         if (i != 2)
             dd.advance();
     }
@@ -628,7 +628,7 @@ dragonError_t test_restore(const char * ddict_ser) {
         dd.restore(i);
         assert(dd.checkpoint_id() == i);
         SerializableInt val = dd[key];
-        assert(val.getVal() == i);
+        assert(val.val() == i);
     }
     return DRAGON_SUCCESS;
 }

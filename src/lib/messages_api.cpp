@@ -16,11 +16,11 @@
 #include "shared_lock.h"
 #include <dragon/channels.h>
 
-static uint64_t sh_tag = 0;
+static uint64_t ls_tag = 0;
 
-uint64_t inc_sh_tag() {
-    uint64_t tmp = sh_tag;
-    sh_tag+=1;
+uint64_t inc_ls_tag() {
+    uint64_t tmp = ls_tag;
+    ls_tag+=1;
     return tmp;
 }
 
@@ -112,22 +112,22 @@ using namespace std;
 /* This is used to support talking to the local services on the same node. The following
    code provides a thread lock for multi-threaded support of communication the LS. */
 
-static void* sh_return_lock_space = NULL;
-static dragonLock_t sh_return_lock;
-static bool sh_return_lock_initd = false;
+static void* ls_return_lock_space = NULL;
+static dragonLock_t ls_return_lock;
+static bool ls_return_lock_initd = false;
 
-dragonError_t init_sh_return_lock() {
+dragonError_t init_ls_return_lock() {
     dragonError_t err;
 
-    if (sh_return_lock_initd == false) {
-        sh_return_lock_space = malloc(dragon_lock_size(DRAGON_LOCK_FIFO_LITE));
-        if (sh_return_lock_space == NULL)
-            err_return(DRAGON_INTERNAL_MALLOC_FAIL, "Could not allocate space for sh_return lock.");
+    if (ls_return_lock_initd == false) {
+        ls_return_lock_space = malloc(dragon_lock_size(DRAGON_LOCK_FIFO_LITE));
+        if (ls_return_lock_space == NULL)
+            err_return(DRAGON_INTERNAL_MALLOC_FAIL, "Could not allocate space for ls_return lock.");
 
-        err = dragon_lock_init(&sh_return_lock, sh_return_lock_space, DRAGON_LOCK_FIFO_LITE);
+        err = dragon_lock_init(&ls_return_lock, ls_return_lock_space, DRAGON_LOCK_FIFO_LITE);
         if (err != DRAGON_SUCCESS)
-            append_err_return(err, "Could not initialize the threading sh_return_lock.");
-        sh_return_lock_initd = true;
+            append_err_return(err, "Could not initialize the threading ls_return_lock.");
+        ls_return_lock_initd = true;
     }
 
     no_err_return(DRAGON_SUCCESS);
@@ -135,106 +135,101 @@ dragonError_t init_sh_return_lock() {
 
 
 static dragonError_t
-dragon_get_shep_return_cd(char** shep_return_cd)
+dragon_get_ls_return_cd(char** ls_return_cd)
 {
-    if (shep_return_cd == NULL)
-        err_return(DRAGON_INVALID_ARGUMENT, "The shep_return_cd argument cannot be NULL.");
+    if (ls_return_cd == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "The ls_return_cd argument cannot be NULL.");
 
-    *shep_return_cd = getenv("DRAGON_SHEP_RET_CD");
-    no_err_return(DRAGON_SUCCESS);
-}
-
-static dragonError_t
-dragon_get_shep_cd(char** shep_cd)
-{
-    if (shep_cd == NULL)
-        err_return(DRAGON_INVALID_ARGUMENT, "The shep_cd argument cannot be NULL.");
-
-    *shep_cd = getenv("DRAGON_LOCAL_SHEP_CD");
+    *ls_return_cd = getenv("DRAGON_LS_RET_QD");
+    if (*ls_return_cd == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "The DRAGON_LS_RET_QD environment variable was not set.");
 
     no_err_return(DRAGON_SUCCESS);
 }
 
 static dragonError_t
-dragon_get_shep_fli(dragonFLIDescr_t* shep_fli)
+dragon_get_ls_cd(char** ls_cd)
+{
+    if (ls_cd == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "The ls_cd argument cannot be NULL.");
+
+    *ls_cd = getenv("DRAGON_LOCAL_LS_QD");
+    if (*ls_cd == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "The DRAGON_LOCAL_LS_QD environment variable was not set.");
+
+    no_err_return(DRAGON_SUCCESS);
+}
+
+static dragonError_t
+dragon_get_ls_fli(dragonFLIDescr_t* ls_fli)
 {
 
     dragonError_t err;
-    char* shep_cd;
-    dragonChannelSerial_t shep_ser;
-    dragonChannelDescr_t shep_ch;
+    char* ls_cd;
+    dragonFLISerial_t ls_ser;
 
-    if (shep_fli == NULL)
-        err_return(DRAGON_INVALID_ARGUMENT, "The shep_fli argument cannot be NULL.");
+    if (ls_fli == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "The ls_fli argument cannot be NULL.");
 
-    err = dragon_get_shep_cd(&shep_cd);
+    err = dragon_get_ls_cd(&ls_cd);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not do send/receive operation since Local Services cd environment variable was not correctly set.");
 
-    shep_ser.data = dragon_base64_decode(shep_cd, &shep_ser.len);
+    ls_ser.data = dragon_base64_decode(ls_cd, &ls_ser.len);
 
-    err = dragon_channel_attach(&shep_ser, &shep_ch);
+    err = dragon_fli_attach(&ls_ser, NULL, ls_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not attach to Local Services input channel.");
 
-    err = dragon_channel_serial_free(&shep_ser);
+    err = dragon_fli_serial_free(&ls_ser);
     if (err != DRAGON_SUCCESS)
             append_err_return(err, "Could not free the serialized channel structure.");
 
-    err = dragon_fli_create(shep_fli, &shep_ch, NULL, NULL, 0, NULL, true, NULL);
-    if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not create main Local Services FLI.");
-
     no_err_return(DRAGON_SUCCESS);
 }
 
-dragonError_t _dragon_get_return_sh_fli(dragonFLIDescr_t* return_fli, dragonChannelSerial_t *shep_return_ser)
+dragonError_t _dragon_get_return_ls_fli(dragonFLIDescr_t* return_fli, dragonFLISerial_t *ls_return_ser)
 {
 
     dragonError_t err;
-    dragonChannelDescr_t shep_return_ch;
 
     if (return_fli == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The return_fli argument cannot be NULL.");
 
-    if (shep_return_ser == NULL)
-        err_return(DRAGON_INVALID_ARGUMENT, "The return_chser argument cannot be NULL.");
+    if (ls_return_ser == NULL)
+        err_return(DRAGON_INVALID_ARGUMENT, "The ls_return_ser argument cannot be NULL.");
 
-    err = dragon_channel_attach(shep_return_ser, &shep_return_ch);
+    err = dragon_fli_attach(ls_return_ser, NULL, return_fli);
     if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not attach to Local Services return channel.");
-
-    err = dragon_fli_create(return_fli, &shep_return_ch, NULL, NULL, 0, NULL, true, NULL);
-    if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not create return Local Services FLI.");
+        append_err_return(err, "Could not attach to Local Services return FLI.");
 
     no_err_return(DRAGON_SUCCESS);
 
 }
 
-dragonError_t dragon_get_return_sh_fli(dragonFLIDescr_t* return_fli)
+dragonError_t dragon_get_return_ls_fli(dragonFLIDescr_t* return_fli)
 {
 
     dragonError_t err;
-    dragonChannelSerial_t shep_return_ser;
-    char* shep_ret_cd;
+    dragonFLISerial_t ls_return_ser;
+    char* ls_ret_qd;
 
     if (return_fli == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The return_fli argument cannot be NULL.");
 
-    err = dragon_get_shep_return_cd(&shep_ret_cd);
+    err = dragon_get_ls_return_cd(&ls_ret_qd);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not do send/receive operation since Local Services return cd environment variable was not correctly set.");
 
-    shep_return_ser.data = dragon_base64_decode(shep_ret_cd, &shep_return_ser.len);
+    ls_return_ser.data = dragon_base64_decode(ls_ret_qd, &ls_return_ser.len);
 
-    err = _dragon_get_return_sh_fli(return_fli, &shep_return_ser);
+    err = _dragon_get_return_ls_fli(return_fli, &ls_return_ser);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Unable to get return FLI");
 
-    err = dragon_channel_serial_free(&shep_return_ser);
+    err = dragon_fli_serial_free(&ls_return_ser);
     if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not free the serialized channel structure.");
+        append_err_return(err, "Could not free the serialized FLI structure.");
 
     no_err_return(DRAGON_SUCCESS);
 
@@ -342,16 +337,15 @@ dragon_logging_detach()
 }
 
 dragonError_t
-dragon_sh_send_receive(DragonMsg* req_msg, DragonResponseMsg** resp_msg, MessageType expected_msg_type,
+dragon_ls_send_receive(DragonMsg* req_msg, DragonResponseMsg** resp_msg, MessageType expected_msg_type,
                        dragonFLIDescr_t* return_fli, const timespec_t* timeout)
 {
     dragonError_t err;
     DragonMsg* msg;
-    dragonFLIDescr_t shep_fli;
+    dragonFLIDescr_t ls_fli;
     dragonFLISendHandleDescr_t sendh;
     dragonFLIRecvHandleDescr_t recvh;
     /* The header is temporary while the local services still uses connection to receive bytes. */
-    uint64_t header = 0xFFFFFFFFFFFFFF40;
     uint64_t req_tag = req_msg->tag();
     bool have_resp = false;
 
@@ -364,55 +358,40 @@ dragon_sh_send_receive(DragonMsg* req_msg, DragonResponseMsg** resp_msg, Message
     if (return_fli == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The return_fli argument cannot be NULL.");
 
-    err = init_sh_return_lock();
+    err = init_ls_return_lock();
     if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not intialize the sh_return thread lock.");
+        append_err_return(err, "Could not intialize the ls_return thread lock.");
 
-    err = dragon_get_shep_fli(&shep_fli);
+    err = dragon_get_ls_fli(&ls_fli);
     if (err != DRAGON_SUCCESS) {
         append_err_return(err, "Could not create FLI descriptor from local services");
     }
 
-    err = dragon_lock(&sh_return_lock);
+    err = dragon_lock(&ls_return_lock);
     if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not lock the sh_return channel");
+        append_err_return(err, "Could not lock the ls_return channel");
 
-    err = dragon_fli_open_send_handle(&shep_fli, &sendh, NULL, NULL, timeout);
+    err = dragon_fli_open_send_handle(&ls_fli, &sendh, NULL, NULL, timeout);
     if (err != DRAGON_SUCCESS) {
-        dragon_unlock(&sh_return_lock);
+        dragon_unlock(&ls_return_lock);
         append_err_return(err, "Could not open send handle.");
-    }
-
-    /* The following is sent temporarily while the local services still uses the old
-       connection.recv code to receive messages. Since unpickle is looking for header
-       data, we send the following 8 byte header that tells unpickle to receive it
-       as bytes. A couple other minor modifications in the Peer2PeerReadingChannelFile and
-       in connection.py were needed as well to allow the bytes data to pass through. The
-       other modifications allow a size greater than the number of bytes to be passed in
-       the header since the size is not known before it is written. The other change, in
-       connection.py, allows a bytes object to be returned when it can't be unpickled. */
-
-    err = dragon_fli_send_bytes(&sendh, sizeof(header), (uint8_t*)&header, 0, true, timeout);
-    if (err != DRAGON_SUCCESS) {
-        dragon_unlock(&sh_return_lock);
-        append_err_return(err, "Could not send header.");
     }
 
     err = req_msg->send(&sendh, timeout);
     if (err != DRAGON_SUCCESS) {
-        dragon_unlock(&sh_return_lock);
+        dragon_unlock(&ls_return_lock);
         append_err_return(err, "Could not send DragonMsg.");
     }
 
     err = dragon_fli_close_send_handle(&sendh, timeout);
     if (err != DRAGON_SUCCESS) {
-        dragon_unlock(&sh_return_lock);
+        dragon_unlock(&ls_return_lock);
         append_err_return(err, "Could not close send handle.");
     }
 
     err = dragon_fli_open_recv_handle(return_fli, &recvh, NULL, NULL, timeout);
     if (err != DRAGON_SUCCESS) {
-        dragon_unlock(&sh_return_lock);
+        dragon_unlock(&ls_return_lock);
         append_err_return(err, "Could not open receive handle.");
     }
 
@@ -423,7 +402,7 @@ dragon_sh_send_receive(DragonMsg* req_msg, DragonResponseMsg** resp_msg, Message
     while (!have_resp) {
         err = recv_fli_msg(&recvh, &msg, timeout);
         if (err != DRAGON_SUCCESS) {
-            dragon_unlock(&sh_return_lock);
+            dragon_unlock(&ls_return_lock);
             append_err_return(err, "Could not open receive response message.");
         }
 
@@ -435,9 +414,9 @@ dragon_sh_send_receive(DragonMsg* req_msg, DragonResponseMsg** resp_msg, Message
             delete msg;
     }
 
-    err = dragon_unlock(&sh_return_lock);
+    err = dragon_unlock(&ls_return_lock);
     if (err != DRAGON_SUCCESS)
-        append_err_return(err, "Could not unlock the sh_return channel.");
+        append_err_return(err, "Could not unlock the ls_return channel.");
 
     err = dragon_fli_close_recv_handle(&recvh, timeout);
     if (err != DRAGON_SUCCESS)
@@ -489,7 +468,7 @@ dragon_create_process_local_channel(dragonChannelDescr_t* ch, uint64_t muid, uin
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHCreateProcessLocalChannelResponseMsg* resp;
+    LSCreateProcessLocalChannelResponseMsg* resp;
     dragonChannelSerial_t ch_ser;
     dragonMemoryPoolDescr_t pool;
 
@@ -502,7 +481,7 @@ dragon_create_process_local_channel(dragonChannelDescr_t* ch, uint64_t muid, uin
     if (capacity == 0)
         capacity = DRAGON_CHANNEL_DEFAULT_CAPACITY;
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -533,13 +512,13 @@ dragon_create_process_local_channel(dragonChannelDescr_t* ch, uint64_t muid, uin
             append_err_return(err, "Could not get pool muid.");
     }
 
-    SHCreateProcessLocalChannelMsg msg(inc_sh_tag(), puid, muid, block_size, capacity, ser_fli);
+    LSCreateProcessLocalChannelMsg msg(inc_ls_tag(), puid, muid, block_size, capacity, ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHCreateProcessLocalChannelResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSCreateProcessLocalChannelResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHCreateProcessLocalChannelResponseMsg*>(resp_msg);
+    resp = static_cast<LSCreateProcessLocalChannelResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -581,7 +560,7 @@ dragon_destroy_process_local_channel(dragonChannelDescr_t* ch, const timespec_t*
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHDestroyProcessLocalChannelResponseMsg* resp;
+    LSDestroyProcessLocalChannelResponseMsg* resp;
     uint64_t cuid = 0;
 
     if (ch == NULL)
@@ -594,7 +573,7 @@ dragon_destroy_process_local_channel(dragonChannelDescr_t* ch, const timespec_t*
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not detach from process local channel.");
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -614,13 +593,13 @@ dragon_destroy_process_local_channel(dragonChannelDescr_t* ch, const timespec_t*
 
     const long puid = strtol(puid_str, &end, 10);
 
-    SHDestroyProcessLocalChannelMsg msg(inc_sh_tag(), puid, cuid, ser_fli);
+    LSDestroyProcessLocalChannelMsg msg(inc_ls_tag(), puid, cuid, ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHDestroyProcessLocalChannelResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSDestroyProcessLocalChannelResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHDestroyProcessLocalChannelResponseMsg*>(resp_msg);
+    resp = static_cast<LSDestroyProcessLocalChannelResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -640,7 +619,7 @@ dragon_create_process_local_pool(dragonMemoryPoolDescr_t* pool, size_t bytes, co
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHCreateProcessLocalPoolResponseMsg* resp;
+    LSCreateProcessLocalPoolResponseMsg* resp;
     dragonMemoryPoolSerial_t pool_ser;
     dragonMemoryPoolAttr_t pool_attrs;
 
@@ -650,7 +629,7 @@ dragon_create_process_local_pool(dragonMemoryPoolDescr_t* pool, size_t bytes, co
     if (name == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The name argument cannot be NULL.");
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -675,14 +654,14 @@ dragon_create_process_local_pool(dragonMemoryPoolDescr_t* pool, size_t bytes, co
         dragon_memory_attr_init(attr);
     }
 
-    SHCreateProcessLocalPoolMsg msg(inc_sh_tag(), puid, bytes, attr->data_min_block_size,
+    LSCreateProcessLocalPoolMsg msg(inc_ls_tag(), puid, bytes, attr->data_min_block_size,
        name, attr->pre_allocs, attr->npre_allocs, ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHCreateProcessLocalPoolResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSCreateProcessLocalPoolResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHCreateProcessLocalPoolResponseMsg*>(resp_msg);
+    resp = static_cast<LSCreateProcessLocalPoolResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -711,13 +690,13 @@ dragon_register_process_local_pool(dragonMemoryPoolDescr_t* pool, const timespec
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHRegisterProcessLocalPoolResponseMsg* resp;
+    LSRegisterProcessLocalPoolResponseMsg* resp;
     dragonMemoryPoolSerial_t pool_ser;
 
     if (pool == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The pool argument cannot be NULL.");
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -747,13 +726,13 @@ dragon_register_process_local_pool(dragonMemoryPoolDescr_t* pool, const timespec
 
     const long puid = strtol(puid_str, &end, 10);
 
-    SHRegisterProcessLocalPoolMsg msg(inc_sh_tag(), puid, pool_ser_str, ser_fli);
+    LSRegisterProcessLocalPoolMsg msg(inc_ls_tag(), puid, pool_ser_str, ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHRegisterProcessLocalPoolResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSRegisterProcessLocalPoolResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHRegisterProcessLocalPoolResponseMsg*>(resp_msg);
+    resp = static_cast<LSRegisterProcessLocalPoolResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -774,13 +753,13 @@ dragon_deregister_process_local_pool(dragonMemoryPoolDescr_t* pool, const timesp
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHDeregisterProcessLocalPoolResponseMsg* resp;
+    LSDeregisterProcessLocalPoolResponseMsg* resp;
     dragonMemoryPoolSerial_t pool_ser;
 
     if (pool == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The pool argument cannot be NULL.");
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -810,13 +789,13 @@ dragon_deregister_process_local_pool(dragonMemoryPoolDescr_t* pool, const timesp
 
     const long puid = strtol(puid_str, &end, 10);
 
-    SHDeregisterProcessLocalPoolMsg msg(inc_sh_tag(), puid, pool_ser_str, ser_fli);
+    LSDeregisterProcessLocalPoolMsg msg(inc_ls_tag(), puid, pool_ser_str, ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHDeregisterProcessLocalPoolResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSDeregisterProcessLocalPoolResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHDeregisterProcessLocalPoolResponseMsg*>(resp_msg);
+    resp = static_cast<LSDeregisterProcessLocalPoolResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -834,7 +813,7 @@ dragon_ls_set_kv(const unsigned char* key, const unsigned char* value, const tim
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHSetKVResponseMsg* resp;
+    LSSetKVResponseMsg* resp;
 
     if (key == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The key argument cannot be NULL.");
@@ -842,7 +821,7 @@ dragon_ls_set_kv(const unsigned char* key, const unsigned char* value, const tim
     if (value == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The value argument cannot be NULL.");
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -856,13 +835,13 @@ dragon_ls_set_kv(const unsigned char* key, const unsigned char* value, const tim
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not free the serialized fli structure.");
 
-    SHSetKVMsg msg(inc_sh_tag(), (char*)key, (char*)value, ser_fli);
+    LSSetKVMsg msg(inc_ls_tag(), reinterpret_cast<const char*>(key), reinterpret_cast<const char*>(value), ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHSetKVResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSSetKVResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHSetKVResponseMsg*>(resp_msg);
+    resp = static_cast<LSSetKVResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -873,14 +852,14 @@ dragon_ls_set_kv(const unsigned char* key, const unsigned char* value, const tim
 }
 
 dragonError_t
-_dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* timeout, dragonChannelSerial_t *return_chser)
+_dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* timeout, dragonFLISerial_t *return_chser)
 {
     dragonError_t err;
     char* ser_fli;
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHGetKVResponseMsg* resp;
+    LSGetKVResponseMsg* resp;
 
     if (key == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The key argument cannot be NULL.");
@@ -888,7 +867,7 @@ _dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* time
     if (value == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The value argument cannot be NULL.");
 
-    err = _dragon_get_return_sh_fli(&return_fli, return_chser);
+    err = _dragon_get_return_ls_fli(&return_fli, return_chser);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -902,13 +881,13 @@ _dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* time
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not free the serialized fli structure.");
 
-    SHGetKVMsg msg(inc_sh_tag(), (char*)key, ser_fli);
+    LSGetKVMsg msg(inc_ls_tag(), reinterpret_cast<const char*>(key), ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHGetKVResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSGetKVResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHGetKVResponseMsg*>(resp_msg);
+    resp = static_cast<LSGetKVResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());
@@ -936,7 +915,7 @@ dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* timeo
     dragonFLIDescr_t return_fli;
     dragonFLISerial_t return_fli_ser;
     DragonResponseMsg* resp_msg;
-    SHGetKVResponseMsg* resp;
+    LSGetKVResponseMsg* resp;
 
     if (key == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The key argument cannot be NULL.");
@@ -944,7 +923,7 @@ dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* timeo
     if (value == NULL)
         err_return(DRAGON_INVALID_ARGUMENT, "The value argument cannot be NULL.");
 
-    err = dragon_get_return_sh_fli(&return_fli);
+    err = dragon_get_return_ls_fli(&return_fli);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not get the Local Services return channel.");
 
@@ -958,13 +937,13 @@ dragon_ls_get_kv(const unsigned char* key, char** value, const timespec_t* timeo
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not free the serialized fli structure.");
 
-    SHGetKVMsg msg(inc_sh_tag(), (char*)key, ser_fli);
+    LSGetKVMsg msg(inc_ls_tag(), reinterpret_cast<const char*>(key), ser_fli);
 
-    err = dragon_sh_send_receive(&msg, &resp_msg, SHGetKVResponseMsg::TC, &return_fli, timeout);
+    err = dragon_ls_send_receive(&msg, &resp_msg, LSGetKVResponseMsg::TC, &return_fli, timeout);
     if (err != DRAGON_SUCCESS)
         append_err_return(err, "Could not complete send/receive operation.");
 
-    resp = static_cast<SHGetKVResponseMsg*>(resp_msg);
+    resp = static_cast<LSGetKVResponseMsg*>(resp_msg);
 
     if (resp->err() != DRAGON_SUCCESS)
         err_return(resp->err(), resp->errInfo());

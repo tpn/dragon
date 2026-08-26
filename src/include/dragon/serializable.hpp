@@ -7,12 +7,15 @@
 #include <vector>
 #include <initializer_list>
 #include <functional>
+#include <memory>
 #include <typeindex>
 #include <type_traits>
 #include <map>
+#include <iostream>
 #include <dragon/fli.h>
 #include <dragon/exceptions.hpp>
 #include <dragon/serializable_types.h>
+#include <dragon/ddict.h>
 
 namespace dragon {
 
@@ -145,7 +148,7 @@ public:
      *
      * @returns A value.
      */
-    Type getVal() const {
+    Type val() const {
         throw DragonError(DRAGON_INVALID_OPERATION, "This class should not be instantiated. Inherit from SerializableBase instead.");
     }
 
@@ -174,6 +177,14 @@ public:
 class SerializableString : public SerializableBase {
     public:
     /**
+     * @brief Default Constructor for Serializable Strings
+     *
+     * Constructs an empty string.
+     *
+     */
+    SerializableString();
+
+    /**
      * @brief Constructor for Serializable Strings
      *
      * This provides a wrapper class for string values that need to be serialized/deserialized in a
@@ -198,7 +209,7 @@ class SerializableString : public SerializableBase {
      *
      * @returns The wrapped value.
      */
-    std::string getVal() const;
+    std::string val() const;
 
     /**
      * @brief See the DerivedSerializable type_id description
@@ -217,6 +228,14 @@ class SerializableString : public SerializableBase {
  */
 class SerializableByteBuffer : public SerializableBase {
     public:
+    /**
+     * @brief Default Constructor for Serializable Byte Buffers
+     *
+     * Default constructor.
+     *
+     */
+    SerializableByteBuffer();
+
     /**
      * @brief Constructor for Serializable Byte Buffers
      *
@@ -261,8 +280,8 @@ class SerializableByteBuffer : public SerializableBase {
     int type_id() const;
 
     private:
-    size_t size;
-    uint8_t* ptr;
+    size_t mSize;
+    uint8_t* mPtr;
 };
 
 /**
@@ -335,7 +354,7 @@ class SerializableScalar : public SerializableBase {
      *
      * @returns The wrapped value.
      */
-    Type getVal() const {
+    Type val() const {
         return mVal;
     }
 
@@ -386,6 +405,13 @@ template<class Type, int TVal>
 class SerializableVector: public SerializableBase {
 public:
     /**
+     * @brief Default Constructor for Serializable Vector of Type
+     *
+     * Provides an empty vector.
+     */
+    SerializableVector() = default;
+
+    /**
      * @brief Constructor for Serializable Vector of Type
      *
      * This provides a wrapper class for a vector of Type values that need to be serialized/deserialized in a
@@ -414,7 +440,7 @@ public:
         // write the size of the array - needed for efficient deserialization without copies
         err = dragon_fli_send_bytes(sendh, sizeof(size_t), (uint8_t*)&num_items, arg, buffer, timeout);
         if (err != DRAGON_SUCCESS)
-            throw DragonError(err, "Could not write vector size to ddict.");
+            throw DragonError(err, "Could not write vector size.");
 
         err = dragon_fli_send_bytes(sendh, sizeof(Type)*num_items, (uint8_t*)mVal.data(), arg, buffer, timeout);
         if (err != DRAGON_SUCCESS)
@@ -447,17 +473,19 @@ public:
 
         expected_size = sizeof(Type) * num_items;
 
-        err = dragon_fli_recv_bytes_into(recvh, expected_size, &received_size, (uint8_t*)rv.mVal.data(), arg, timeout);
-        if (err == DRAGON_TIMEOUT)
-            throw TimeoutError(err, "Operation timeout.");
+        if (expected_size != 0) {
+            err = dragon_fli_recv_bytes_into(recvh, expected_size, &received_size, (uint8_t*)rv.mVal.data(), arg, timeout);
+            if (err == DRAGON_TIMEOUT)
+                throw TimeoutError(err, "Operation timeout.");
 
-        if (err != DRAGON_SUCCESS)
-            throw DragonError(err, "Could not read element of vector.");
+            if (err != DRAGON_SUCCESS)
+                throw DragonError(err, "Could not read element of vector.");
 
-        if (received_size != expected_size) {
-            char msg[200];
-            snprintf(msg, 200, "The received data of size %lu did not match the expected size of %lu for the vector.", received_size, expected_size);
-            throw DragonError(DRAGON_INVALID_ARGUMENT, msg);
+            if (received_size != expected_size) {
+                char msg[200];
+                snprintf(msg, 200, "The received data of size %lu did not match the expected size of %lu for the vector.", received_size, expected_size);
+                throw DragonError(DRAGON_INVALID_ARGUMENT, msg);
+            }
         }
 
         return rv; // Relies on RVO for efficiently returning the vector.
@@ -468,7 +496,7 @@ public:
      *
      * @returns The wrapped value.
      */
-    std::vector<Type> getVal() const {
+    std::vector<Type> val() const {
         return mVal;
     }
 
@@ -496,9 +524,16 @@ template<class Type, int TVal>
 class Serializable2DMatrix: public SerializableBase {
 public:
     /**
-     * @brief Constructor for Serializable Vector of Type
+     * @brief Default Constructor for Serializable 2D Matrix of Type
      *
-     * This provides a wrapper class for a vector of Type values that need to be serialized/deserialized in a
+     * Provides an empty matrix.
+     */
+    Serializable2DMatrix() = default;
+
+    /**
+     * @brief Constructor for Serializable 2D Matrix of Type
+     *
+     * This provides a wrapper class for a matrix of Type values that need to be serialized/deserialized in a
      * Dragon program.
      *
      * @param vec A Type vector value to wrap.
@@ -506,17 +541,17 @@ public:
     Serializable2DMatrix(std::vector<std::vector<Type>> obj): mVal(obj) {}
 
     /**
-     * @brief Constructor for Serializable Vector of Type
+     * @brief Constructor for Serializable 2D Matrix of Type
      *
-     * Contruct an empty serializable Type vector with size elements.
+     * Contruct an empty serializable Type Matrix with size elements.
      *
      * @param rows The number of rows for the empty matrix.
      * @param cols The number of columns for the empty matrix.
      */
     Serializable2DMatrix(size_t rows, size_t cols): mVal(std::vector<std::vector<Type>>()) {
-        for (size_t i; i<rows; i++) {
+        for (size_t i=0; i<rows; i++) {
             std::vector<Type> row;
-            for (size_t j; j<cols; j++)
+            for (size_t j=0; j<cols; j++)
                 row.push_back(0);
 
             mVal.push_back(row);
@@ -533,7 +568,7 @@ public:
         // write the number of rows in the vector
         err = dragon_fli_send_bytes(sendh, sizeof(size_t), (uint8_t*)&nrows, arg, buffer, timeout);
         if (err != DRAGON_SUCCESS)
-            throw DragonError(err, "Could not write bytes to ddict.");
+            throw DragonError(err, "Could not write bytes.");
 
         for (auto& row: mVal) {
             SerializableVector<Type, TVal> sVec(row);
@@ -566,7 +601,7 @@ public:
 
         for (size_t i=0; i<nrows; i++) {
             SerializableVector<Type, TVal> tmp_vec = SerializableVector<Type, TVal>::deserialize(recvh, arg, timeout);
-            val.push_back(tmp_vec.getVal());
+            val.push_back(tmp_vec.val());
         }
 
         return Serializable2DMatrix<Type, TVal>(val); // Relies on RVO for efficiently returning the vector.
@@ -577,7 +612,7 @@ public:
      *
      * @returns The wrapped value.
      */
-    std::vector<std::vector<Type>> getVal() const {
+    std::vector<std::vector<Type>> val() const {
         return mVal;
     }
 
@@ -600,6 +635,737 @@ using SerializableIntVector = SerializableVector<int, DragonSerType::SERTYPE_INT
 using SerializableDoubleVector = SerializableVector<double, DragonSerType::SERTYPE_DOUBLEVECTOR>;
 using Serializable2DIntMatrix = Serializable2DMatrix<int, DragonSerType::SERTYPE_INTMATRIX>;
 using Serializable2DDoubleMatrix = Serializable2DMatrix<double, DragonSerType::SERTYPE_DOUBLEMATRIX>;
+
+/* NDArray helpers. Private API for SerializableNDArray */
+int ndarray_unique_id(dragonDDictDescr_t* ddict, timespec_t* timeout);
+void ndarray_attach(dragonDDictDescr_t* ddict, const char* serialized_dict, timespec_t* timeout);
+void ndarray_put(dragonDDictDescr_t* ddict, const SerializableString& key, const SerializableByteBuffer& buf, timespec_t* timeout);
+SerializableByteBuffer ndarray_get(dragonDDictDescr_t* ddict, const SerializableString& key, timespec_t* timeout);
+void ndarray_destroy(dragonDDictDescr_t* ddict, const SerializableString& key, timespec_t* timeout);
+void ndarray_detach(dragonDDictDescr_t* ddict, const char* serialized_dict);
+
+/**
+ * @class SerializableNDArray
+ * @brief A Serializable NDArray
+ *
+ * The class provides the Serializable interface for generalized matrices
+ * of any dimension and size. The Python counterpart is a numpy ndarray. This
+ * class makes sharing of data with ndarray objects in Python possible. The
+ * C++ version allows the creation of slices of the n-dimensional arrays. All
+ * slices within a process share the same cached data to be efficient in storage
+ * as possible.
+ *
+ * The underlying implementation stores all data within a Dragon DDict and it
+ * is locally cached lazily when the array is first indexed. If the data is not
+ * indexed, then only metadata is communicated between processes to be as efficient
+ * in passing an NDArray between processes, through a Queue or DDict, as possible.
+ *
+ * Since there is locally cached data when working with an NDArray, sync
+ * should be called when wishing to flush the cache back so all
+ * others can see it and refresh should be called when it is known the
+ * cache should be refreshed. Note that calling refresh immediately overwrites
+ * any locally cached data with the globally available version without regard to possible
+ * modifications of the cache. It is up to the program to provide synchronization
+ * around syncing and refreshing NDArray data.
+ */
+template<class Type, int TVal>
+class SerializableNDArray: public SerializableBase {
+public:
+    /** @brief Constructor for Serializable NDArray
+     *
+     * Contruct a serializable ndarray with meta data of the ndarray encoded
+     * within and the data stored in the provided DDict. When serializing
+     * and passing around the ndarray, only the metadata is passed between
+     * processes while the ndarray data exists in the DDict and can be
+     * retrieved separately when needed.
+     *
+     * This means you can pass SerializableNDArrays between processes without
+     * copying all the data they refer to until you are actually going to
+     * use it. Once referenced, all copies of an NDArray object in a
+     * process refer to the same cached data so that multiple copies are
+     * not kept within a process (or its threads). This makes working on
+     * data from multiple threads convenient. However, care must be taken
+     * so that multiple threads are not modifying the same cached data at
+     * the same time. When data has been updated in a process, sync should
+     * be called to copy that data back to the shared DDict so it can be
+     * found by other processes. If another process has updated the
+     * NDArray, then refresh can be called to load the latest data into
+     * cached data for this process.
+     *
+     * @param dimensions A vector of length matching the dimensions of the ndarray.
+     * Each value in dimensions is the size of the ndarray in that dimension.
+     * @param data A pointer to the ndarray data. It will be copied into the provided DDict.
+     * @param ddict_ser A serialized Distributed Dictionary in which to store the ndarray data.
+     * @param timeout A pointer to a timeout structure or NULL. The timeout is used for all interactions
+     * with the provided DDict attached from the ddict_ser value.
+     */
+    SerializableNDArray(const std::vector<int>& dimensions, void* data, const char* ser_ddict, const timespec_t* timeout):
+        mElementSize(sizeof(Type)), mDimensions(dimensions), mDDictSer(ser_ddict) {
+
+        if (timeout == nullptr) {
+            this->mTimeout = nullptr;
+            this->mTimeoutVal = {-1,-1};
+        } else {
+            this->mTimeoutVal = *timeout;
+            this->mTimeout = &this->mTimeoutVal;
+        }
+
+        int num_elements = 1;
+        for (const auto& dim : dimensions) {
+            num_elements *= dim;
+        }
+
+        if (dimensions.empty())
+            num_elements = 0;
+
+
+
+        int total_size = num_elements * mElementSize.val();
+
+        mBuf = SerializableByteBuffer(total_size, (uint8_t*)data);
+
+        ndarray_attach(&mDDict, ser_ddict, mTimeout);
+        int unique_int = ndarray_unique_id(&mDDict, mTimeout);
+
+        std::string ndarray_key = "DRAGON_NDARRAY_"+ std::to_string(unique_int);
+        mNDArrayKey = ndarray_key;
+
+        ndarray_put(&mDDict, mNDArrayKey, mBuf, mTimeout);
+        mCachedData = data;
+    }
+
+    ~SerializableNDArray() override = default;
+
+    /** @brief Destroy an ndarray by removing its data from the DDict backing store.
+     *
+     * An NDArray stores its data in a DDict so only meta data is transferred between
+     * processes. This method cleans up that DDict backed data when the ndarray is
+     * no longer needed.
+     */
+    void destroy() {
+
+        try {
+            ndarray_destroy(&mDDict, mNDArrayKey, mTimeout);
+        } catch (const DragonError&) {
+            /* destroy is best effort cleanup; the entry may already be gone. */
+        }
+
+        if (mCachedData != nullptr) {
+            free(mCachedData);
+            mCachedData = nullptr;
+        }
+    }
+
+    /** @brief Detach from an NDArray DDict
+     *
+     * Only call detach if you are completely done with the ndarray and no longer need access
+     * to the underlying DDict. Call this after calling destroy on the ndarray.
+     */
+    void ddict_detach() {
+        try {
+            ndarray_detach(&mDDict, mDDictSer.val().c_str());
+        } catch (const DragonError&) {
+            /* detach is best effort cleanup; the DDict may already be detached. */
+        }
+    }
+
+    /** @brief Copy Constructor for Serializable NDArray
+     *
+     * Construct a copy of an existing SerializableNDArray. The copy shares the same
+     * underlying DDict entry and key, meaning both ndarrays refer to the same data.
+     */
+    SerializableNDArray(const SerializableNDArray<Type, TVal>& other) :
+        mElementSize(other.mElementSize),
+        mDimensions(other.mDimensions),
+        mIndices(other.mIndices),
+        mBuf(other.mBuf),
+        mDDictSer(other.mDDictSer),
+        mNDArrayKey(other.mNDArrayKey),
+        mTimeoutVal(other.mTimeoutVal) {
+
+        if (other.mTimeout == nullptr) {
+            mTimeout = nullptr;
+        } else {
+            mTimeout = &mTimeoutVal;
+        }
+
+        ndarray_attach(&mDDict, other.mDDictSer.val().c_str(), mTimeout);
+        mCachedData = other.mCachedData;
+    }
+
+    int type_id() const override {
+        return TVal;
+    }
+
+    void serialize(dragonFLISendHandleDescr_t* sendh, uint64_t arg, const bool buffer, const timespec_t* timeout) const override {
+        SerializableInt secs(mTimeoutVal.tv_sec);
+        SerializableInt nsecs(mTimeoutVal.tv_nsec);
+
+        mElementSize.serialize(sendh, arg, true, timeout);
+        mDimensions.serialize(sendh, arg, true, timeout);
+        mIndices.serialize(sendh, arg, true, timeout);
+        mDDictSer.serialize(sendh, arg, true, timeout);
+        mNDArrayKey.serialize(sendh, arg, true, timeout);
+        secs.serialize(sendh, arg, true, timeout);
+        nsecs.serialize(sendh, arg, buffer, timeout);
+    }
+
+    static SerializableNDArray<Type, TVal> deserialize(dragonFLIRecvHandleDescr_t* recvh, uint64_t* arg, const timespec_t* timeout) {
+        SerializableInt element_size = SerializableInt::deserialize(recvh, arg, timeout);
+        SerializableIntVector dimensions = SerializableIntVector::deserialize(recvh, arg, timeout);
+        SerializableIntVector indices = SerializableIntVector::deserialize(recvh, arg, timeout);
+        SerializableString ddict_ser = SerializableString::deserialize(recvh, arg, timeout);
+        SerializableString ndarray_key = SerializableString::deserialize(recvh, arg, timeout);
+        SerializableInt secs = SerializableInt::deserialize(recvh, arg, timeout);
+        SerializableInt nsecs = SerializableInt::deserialize(recvh, arg, timeout);
+
+        return SerializableNDArray<Type, TVal>(element_size, dimensions, indices, ddict_ser, ndarray_key, secs, nsecs, nullptr);
+    }
+
+    /** @brief Index operator
+     *
+     * The user can index into a serializable ndarray up to the dimensions of the
+     * data. Once all dimensions have been specified, the user can access
+     * individual elements of the ndarray. Elements must be of
+     * element_size as specified when the ndarray was created. The user
+     * can also get the address of any element, including rows within the
+     * ndarray. It is assumed that data within the ndarray is stored in
+     * row major form abstracted to higher dimensions. The cached data is
+     * read lazily when it is actually going to be referenced. This
+     * behavior is triggered by calling the index of operator.
+     *
+     * @param idx The index into the current dimension.
+     */
+    SerializableNDArray<Type, TVal> operator[](int idx) const {
+
+        if (mCachedData == nullptr)
+            refresh();
+
+        std::vector<int> new_indices = mIndices.val();
+        if (new_indices.size() >= mDimensions.val().size())
+            throw DragonError(DRAGON_INVALID_ARGUMENT, "Too many dimensions indexing into SerializableNDArray.");
+        int dim_size = mDimensions.val()[new_indices.size()];
+        if (idx >= dim_size)
+            throw DragonError(DRAGON_INVALID_ARGUMENT, "Index out of bounds for SerializableNDArray.");
+        new_indices.push_back(idx);
+        SerializableInt secs(mTimeoutVal.tv_sec);
+        SerializableInt nsecs(mTimeoutVal.tv_nsec);
+        return SerializableNDArray<Type, TVal>(mElementSize, mDimensions, SerializableIntVector(new_indices), mDDictSer, mNDArrayKey, secs, nsecs, &mBuf, &mDDict);
+    }
+
+    /** @brief Address Of
+     *
+     * Provide the address of a particular row or element within the ndarray. This address is only valid within the current
+     * process and should not be shared.
+     */
+    void* operator&() const {
+        if (mCachedData == nullptr)
+            refresh();
+
+        const std::vector<int> dims = mDimensions.val();
+        const std::vector<int> idxs = mIndices.val();
+        const auto elem_sz = (size_t)mElementSize.val();
+        const size_t n = dims.size();
+        const size_t m = idxs.size();
+
+        // Compute element offset using row-major (C) ordering.
+        // For indices [i0, i1, ..., i_{m-1}] into dimensions [d0, d1, ..., d_{n-1}]:
+        //   offset = i0*(d1*...*d_{n-1}) + i1*(d2*...*d_{n-1}) + ... + i_{m-1}*(d_m*...*d_{n-1})
+        size_t offset_elements = 0;
+        for (size_t k = 0; k < m; k++) {
+            size_t stride = 1;
+            for (size_t j = k + 1; j < n; j++)
+                stride *= (size_t)dims[j];
+            offset_elements += (size_t)idxs[k] * stride;
+        }
+
+        size_t offset = offset_elements * elem_sz;
+
+        if (offset > mBuf.getSize())
+            throw DragonError(DRAGON_FAILURE, "The address offset was bigger than the size of the ndarray. This should not happen.");
+
+        return (uint8_t*)mCachedData + offset;
+    }
+
+    /** @brief Refresh cached data
+     *
+     * If accessing the data of the ndarray, data is cached locally. This method will retrieve the shared
+     * data from the DDict source and throw away any currently cached data.
+     */
+    void refresh() const {
+        mBuf = ndarray_get(&mDDict, mNDArrayKey, mTimeout);
+        mCachedData = mBuf.getPtr();
+    }
+
+    /** @brief Update NDArray with Cached data
+     *
+     * Calling this rewrites the ndarray data with cached data.
+     */
+    void sync() {
+        if (mCachedData == nullptr)
+            throw DragonError(DRAGON_INVALID_OPERATION, "Cannot sync SerializableNDArray: no cached data.");
+
+        ndarray_put(&mDDict, mNDArrayKey, mBuf, mTimeout);
+    }
+
+    /** @brief Access an element of an NDArray
+     *
+     * When indices have fully specified the location of an element, that element will be yielded
+     * by calling this method.
+     */
+    Type val() {
+        if ((size_t)mElementSize.val() != sizeof(Type))
+            throw DragonError(DRAGON_INVALID_ARGUMENT, "The element size does not match size of Type.");
+        if (mIndices.val().size() != mDimensions.val().size())
+            throw DragonError(DRAGON_INVALID_ARGUMENT, "You must fully specify the indices to an element to use asLong.");
+
+        if (mCachedData == nullptr) {
+            refresh();
+        }
+        void* addr = &(*this);
+        return *(Type*)addr;
+    }
+
+    /** @brief Return the size of a dimension in the ndarray.
+     *
+     * Calling this will return the size of a vector in the
+     * ndarray. The vector does not really exist. What is returned
+     * is the size of the next unspecified dimension of the ndarray.
+     */
+
+    int size() const {
+        size_t specified_indices = mIndices.val().size();
+
+        if (specified_indices == mDimensions.val().size())
+            throw DragonError(DRAGON_INVALID_OPERATION, "You cannot request the size of a primitive ndarray location.");
+
+
+        return mDimensions.val()[specified_indices];
+    }
+
+    /** @brief Conversion operator
+     *
+     * Convert the SerializableNDArray to its template Type. This is useful when all indices have
+     * been provided and the user want to access an element at the specified set of indices.
+     */
+    operator Type() {
+        return val();
+    }
+
+    /** @brief Assignment operator
+     *
+     * Store a value at the indexed location. The region size for the remaining un-indexed
+     * dimensions must match the size of a double.
+     */
+    SerializableNDArray<Type, TVal>& operator=(Type value) {
+        // Check that region size matches sizeof(Type)
+        if (region_size() != sizeof(Type))
+            throw DragonError(DRAGON_INVALID_ARGUMENT, "Region size does not match size of double.");
+
+        // Get address and store value
+        void* addr = &(*this);
+        *(Type*)addr = value;
+
+        return *this;
+    }
+
+    /** @brief Assignment operator for another NDArray
+     *
+     * Copy data from another ndarray to this ndarray. Both ndarrays must have the same region size.
+     */
+    SerializableNDArray<Type, TVal>& operator=(const SerializableNDArray<Type, TVal>& other) {
+        // Check that region sizes match
+        if (region_size() != other.region_size())
+            throw DragonError(DRAGON_INVALID_ARGUMENT, "Region sizes do not match for ndarray assignment.");
+
+        // Get addresses and copy data
+        void* dest_addr = &(*this);
+        void* src_addr = other.operator&();
+        memcpy(dest_addr, src_addr, region_size());
+
+        return *this;
+    }
+
+    /** @brief Get the size of the specified region
+     *
+     * Compute and return the size in bytes of the region specified by the current indices.
+     * This is the size of the un-indexed sub-region in bytes.
+     */
+    size_t region_size() const {
+        const std::vector<int> dims = mDimensions.val();
+        const std::vector<int> idxs = mIndices.val();
+        const auto elem_sz = (size_t)mElementSize.val();
+        const size_t n = dims.size();
+        const size_t m = idxs.size();
+
+        // Compute region size (product of remaining dimensions)
+        size_t region_elements = 1;
+        for (size_t k = m; k < n; k++)
+            region_elements *= (size_t)dims[k];
+
+        return region_elements * elem_sz;
+    }
+
+    /** @brief Create a new ndarray from the current region
+     *
+     * Constructs a new ndarray representing the current indexed region with the remaining
+     * un-indexed dimensions. The new ndarray has empty indices and can be indexed further
+     * or accessed directly.
+     *
+     * Calling regionAsNDArray makes a copy of the region. It does not share data with the
+     * current NDArray. If you want to share data, you can index into the current
+     * array and get the address of any specific region.
+     */
+    SerializableNDArray<Type, TVal> regionAsNDArray() const {
+        // Get the remaining dimensions (those not yet indexed)
+        std::vector<int> original_dims = mDimensions.val();
+        std::vector<int> current_indices = mIndices.val();
+        std::vector<int> remaining_dims(
+            original_dims.begin() + current_indices.size(),
+            original_dims.end()
+        );
+
+        // Get the region data address
+        void* region_addr = this->operator&();
+
+        // Create new ndarray with region data
+        SerializableNDArray<Type, TVal> region(
+            remaining_dims,
+            region_addr,
+            mDDictSer.val().c_str(),
+            mTimeout
+        );
+
+        region.refresh();
+        return region;
+    }
+
+private:
+    SerializableNDArray(const SerializableInt& sz, const SerializableIntVector& dim, const SerializableIntVector& idxs,
+        const SerializableString& dd_ser, const SerializableString& tdk, const SerializableInt& secs,
+        const SerializableInt& ns, const SerializableByteBuffer* buf,
+        const dragonDDictDescr_t* ddict = nullptr):
+        mElementSize(sz), mDimensions(dim), mIndices(idxs), mDDictSer(dd_ser), mNDArrayKey(tdk) {
+
+        if (secs == -1) {
+            mTimeout = nullptr;
+            // -1 is the "no timeout" sentinel and must round-trip through serialize/operator[].
+            mTimeoutVal = {-1,-1};
+        } else {
+            mTimeoutVal.tv_sec = secs.val();
+            mTimeoutVal.tv_nsec = ns.val();
+            mTimeout = &mTimeoutVal;
+        }
+
+        if (ddict != nullptr)
+            /* Indexing shares the attachment of the array it indexes into. Attaching here
+               would create channels for every element access. */
+            mDDict = *ddict;
+        else
+            ndarray_attach(&mDDict, dd_ser.val().c_str(), mTimeout);
+
+        if (buf != nullptr) {
+            mBuf = *buf;
+            mCachedData = mBuf.getPtr();
+        } else {
+            mBuf = SerializableByteBuffer(0, nullptr);
+            mCachedData = nullptr;
+        }
+    }
+
+    SerializableInt mElementSize;
+    SerializableIntVector mDimensions;
+    SerializableIntVector mIndices;
+    mutable SerializableByteBuffer mBuf;
+    SerializableString mDDictSer;
+    SerializableString mNDArrayKey;
+    timespec_t mTimeoutVal;
+    timespec_t* mTimeout;
+    mutable dragonDDictDescr_t mDDict;
+    mutable void* mCachedData;
+};
+
+/* More Pre-defined Serializable Types*/
+using SerializableDoubleNDArray = SerializableNDArray<double, DragonSerType::SERTYPE_DOUBLENDARRAY>;
+using SerializableFloatNDArray = SerializableNDArray<float, DragonSerType::SERTYPE_FLOATNDARRAY>;
+using SerializableIntNDArray = SerializableNDArray<int, DragonSerType::SERTYPE_INTNDARRAY>;
+using SerializableLongNDArray = SerializableNDArray<long, DragonSerType::SERTYPE_LONGNDARRAY>;
+
+/* Declared here so a SerializableQueue can be built from a Queue. */
+template <class Serializable> class Queue;
+
+/**
+ * @class SerializableQueue
+ * @brief A Serializable Dragon Queue
+ *
+ * The class provides the Serializable interface for Dragon Queues so that a Queue
+ * may itself be sent through a Queue or stored in a DDict. Only the base64 encoded
+ * descriptor of the Queue travels between processes, exactly as it does when a Queue
+ * is serialized in Python and attached to in C++. The lifetime of the Queue is still
+ * managed by whoever created it.
+ *
+ * The template argument mirrors the Queue template argument. It is the type of the
+ * values carried by the Queue that this descriptor refers to.
+ */
+template<class Serializable>
+class SerializableQueue: public SerializableBase {
+public:
+    /** @brief Default constructor providing an empty descriptor. */
+    SerializableQueue() = default;
+
+    /** @brief Construct from a base64 encoded serialized Queue descriptor. */
+    SerializableQueue(const std::string& serialized): mSerialized(serialized) {}
+
+    /** @brief Construct from a base64 encoded serialized Queue descriptor. */
+    SerializableQueue(const char* serialized): mSerialized(std::string(serialized)) {}
+
+    /** @brief Construct from an attached Queue.
+     *
+     * This is defined in queue.hpp because it requires the complete Queue template.
+     */
+    SerializableQueue(Queue<Serializable>& queue);
+
+    /**
+     * @brief See the DerivedSerializable serialize description.
+     */
+    void serialize(dragonFLISendHandleDescr_t* sendh, uint64_t arg, const bool buffer, const timespec_t* timeout) const override {
+        mSerialized.serialize(sendh, arg, buffer, timeout);
+    }
+
+    /**
+     * @brief See the DerivedSerializable deserialize description.
+     */
+    static SerializableQueue<Serializable> deserialize(dragonFLIRecvHandleDescr_t* recvh, uint64_t* arg, const timespec_t* timeout) {
+        return SerializableQueue<Serializable>(SerializableString::deserialize(recvh, arg, timeout).val());
+    }
+
+    /**
+     * @brief Get the base64 encoded descriptor of the Queue.
+     *
+     * Pass this to the Queue attach constructor to interact with the Queue. For instance
+     *
+     *     Queue<Serializable> queue(serializable_queue.val().c_str(), nullptr);
+     *
+     * @returns The serialized descriptor of the Queue.
+     */
+    std::string val() const {
+        return mSerialized.val();
+    }
+
+    /**
+     * @brief See the DerivedSerializable type_id description
+     */
+    int type_id() const override {
+        return DragonSerType::SERTYPE_QUEUE;
+    }
+
+private:
+    SerializableString mSerialized;
+};
+
+/* Declared here so a SerializableDDict can be built from a DDict. */
+template <class SerializableKey, class SerializableValue> class DDict;
+
+/**
+ * @class SerializableDDict
+ * @brief A Serializable Distributed Dictionary
+ *
+ * The class provides the Serializable interface for Dragon Distributed Dictionaries
+ * so that a DDict may be sent through a Queue or stored in another DDict. Only the
+ * base64 encoded descriptor of the DDict travels between processes, exactly as it does
+ * when a DDict is serialized in Python and attached to in C++. The lifetime of the
+ * DDict is still managed by whoever created it.
+ *
+ * The template arguments mirror the DDict template arguments. They are the key and
+ * value types of the DDict that this descriptor refers to.
+ */
+template<class SerializableKey, class SerializableValue>
+class SerializableDDict: public SerializableBase {
+public:
+    /** @brief Default constructor providing an empty descriptor. */
+    SerializableDDict() = default;
+
+    /** @brief Construct from a base64 encoded serialized DDict descriptor. */
+    SerializableDDict(const std::string& serialized): mSerialized(serialized) {}
+
+    /** @brief Construct from a base64 encoded serialized DDict descriptor. */
+    SerializableDDict(const char* serialized): mSerialized(std::string(serialized)) {}
+
+    /** @brief Construct from an attached DDict.
+     *
+     * This is defined in dictionary.hpp because it requires the complete DDict template.
+     */
+    SerializableDDict(DDict<SerializableKey, SerializableValue>& dict);
+
+    /**
+     * @brief See the DerivedSerializable serialize description.
+     */
+    void serialize(dragonFLISendHandleDescr_t* sendh, uint64_t arg, const bool buffer, const timespec_t* timeout) const override {
+        mSerialized.serialize(sendh, arg, buffer, timeout);
+    }
+
+    /**
+     * @brief See the DerivedSerializable deserialize description.
+     */
+    static SerializableDDict<SerializableKey, SerializableValue> deserialize(dragonFLIRecvHandleDescr_t* recvh, uint64_t* arg, const timespec_t* timeout) {
+        return SerializableDDict<SerializableKey, SerializableValue>(SerializableString::deserialize(recvh, arg, timeout).val());
+    }
+
+    /**
+     * @brief Get the base64 encoded descriptor of the DDict.
+     *
+     * Assigning a received Serializable to a DDict attaches to it directly, but the
+     * descriptor is available here when a timeout is needed on the attach. For instance
+     *
+     *     DDict<Serializable, Serializable> dict(serializable_ddict.val().c_str(), &timeout);
+     *
+     * @returns The serialized descriptor of the DDict.
+     */
+    std::string val() const {
+        return mSerialized.val();
+    }
+
+    /**
+     * @brief See the DerivedSerializable type_id description
+     */
+    int type_id() const override {
+        return DragonSerType::SERTYPE_DDICT;
+    }
+
+private:
+    SerializableString mSerialized;
+};
+
+/* Declared here so a SerializableBarrier and SerializableSemaphore can be built from them. */
+class Barrier;
+class Semaphore;
+
+/**
+ * @class SerializableBarrier
+ * @brief A Serializable Dragon Barrier
+ *
+ * The class provides the Serializable interface for Dragon Barriers so that a Barrier
+ * may be sent through a Queue or stored in a DDict. Only the base64 encoded descriptor
+ * of the Barrier travels between processes, exactly as it does when a Barrier is
+ * serialized in Python and attached to in C++. The lifetime of the Barrier is still
+ * managed by whoever created it.
+ */
+class SerializableBarrier: public SerializableBase {
+public:
+    /** @brief Default constructor providing an empty descriptor. */
+    SerializableBarrier() = default;
+
+    /** @brief Construct from a base64 encoded serialized Barrier descriptor. */
+    SerializableBarrier(const std::string& serialized): mSerialized(serialized) {}
+
+    /** @brief Construct from a base64 encoded serialized Barrier descriptor. */
+    SerializableBarrier(const char* serialized): mSerialized(std::string(serialized)) {}
+
+    /** @brief Construct from an attached Barrier.
+     *
+     * This is defined in barrier.hpp because it requires the complete Barrier class.
+     */
+    SerializableBarrier(Barrier& barrier);
+
+    /**
+     * @brief See the DerivedSerializable serialize description.
+     */
+    void serialize(dragonFLISendHandleDescr_t* sendh, uint64_t arg, const bool buffer, const timespec_t* timeout) const override {
+        mSerialized.serialize(sendh, arg, buffer, timeout);
+    }
+
+    /**
+     * @brief See the DerivedSerializable deserialize description.
+     */
+    static SerializableBarrier deserialize(dragonFLIRecvHandleDescr_t* recvh, uint64_t* arg, const timespec_t* timeout) {
+        return SerializableBarrier(SerializableString::deserialize(recvh, arg, timeout).val());
+    }
+
+    /**
+     * @brief Get the base64 encoded descriptor of the Barrier.
+     *
+     * Assigning a received Serializable to a Barrier attaches to it directly, but the
+     * descriptor is available here when an action is needed on the attach. For instance
+     *
+     *     Barrier barrier(serializable_barrier.val().c_str(), my_action);
+     *
+     * @returns The serialized descriptor of the Barrier.
+     */
+    std::string val() const {
+        return mSerialized.val();
+    }
+
+    /**
+     * @brief See the DerivedSerializable type_id description
+     */
+    int type_id() const override {
+        return DragonSerType::SERTYPE_BARRIER;
+    }
+
+private:
+    SerializableString mSerialized;
+};
+
+/**
+ * @class SerializableSemaphore
+ * @brief A Serializable Dragon Semaphore
+ *
+ * The class provides the Serializable interface for Dragon Semaphores so that a
+ * Semaphore may be sent through a Queue or stored in a DDict. Only the base64 encoded
+ * descriptor of the Semaphore travels between processes, exactly as it does when a
+ * Semaphore is serialized in Python and attached to in C++. The lifetime of the
+ * Semaphore is still managed by whoever created it.
+ */
+class SerializableSemaphore: public SerializableBase {
+public:
+    /** @brief Default constructor providing an empty descriptor. */
+    SerializableSemaphore() = default;
+
+    /** @brief Construct from a base64 encoded serialized Semaphore descriptor. */
+    SerializableSemaphore(const std::string& serialized): mSerialized(serialized) {}
+
+    /** @brief Construct from a base64 encoded serialized Semaphore descriptor. */
+    SerializableSemaphore(const char* serialized): mSerialized(std::string(serialized)) {}
+
+    /** @brief Construct from an attached Semaphore.
+     *
+     * This is defined in semaphore.hpp because it requires the complete Semaphore class.
+     */
+    SerializableSemaphore(Semaphore& semaphore);
+
+    /**
+     * @brief See the DerivedSerializable serialize description.
+     */
+    void serialize(dragonFLISendHandleDescr_t* sendh, uint64_t arg, const bool buffer, const timespec_t* timeout) const override {
+        mSerialized.serialize(sendh, arg, buffer, timeout);
+    }
+
+    /**
+     * @brief See the DerivedSerializable deserialize description.
+     */
+    static SerializableSemaphore deserialize(dragonFLIRecvHandleDescr_t* recvh, uint64_t* arg, const timespec_t* timeout) {
+        return SerializableSemaphore(SerializableString::deserialize(recvh, arg, timeout).val());
+    }
+
+    /**
+     * @brief Get the base64 encoded descriptor of the Semaphore.
+     *
+     * @returns The serialized descriptor of the Semaphore.
+     */
+    std::string val() const {
+        return mSerialized.val();
+    }
+
+    /**
+     * @brief See the DerivedSerializable type_id description
+     */
+    int type_id() const override {
+        return DragonSerType::SERTYPE_SEMAPHORE;
+    }
+
+private:
+    SerializableString mSerialized;
+};
 
 /**
  * @class Serializable
@@ -628,6 +1394,10 @@ class Serializable: public SerializableBase {
     Serializable(std::initializer_list<int> v);
     Serializable(std::initializer_list<double> v);
     Serializable(std::initializer_list<std::initializer_list<double>> m);
+    Serializable(const std::vector<int>& v);
+    Serializable(const std::vector<double>& v);
+    Serializable(const std::vector<std::vector<int>>& m);
+    Serializable(const std::vector<std::vector<double>>& m);
     Serializable(size_t size, uint8_t* ptr);
     Serializable(const char* s);
     Serializable(const SerializableString& s);
@@ -638,6 +1408,15 @@ class Serializable: public SerializableBase {
     Serializable(const Serializable2DIntMatrix& v);
     Serializable(const Serializable2DDoubleMatrix& v);
     Serializable(const SerializableByteBuffer& b);
+    Serializable(const SerializableDoubleNDArray& t);
+    Serializable(const SerializableFloatNDArray& t);
+    Serializable(const SerializableIntNDArray& t);
+    Serializable(const SerializableLongNDArray& t);
+    Serializable(const SerializableQueue<Serializable>& q);
+    Serializable(const SerializableDDict<Serializable, Serializable>& d);
+    Serializable(const SerializableBarrier& b);
+    Serializable(const SerializableSemaphore& s);
+
 
     virtual ~Serializable();
 
@@ -664,7 +1443,7 @@ class Serializable: public SerializableBase {
      */
     int type_id() const;
 
-    SerializableBase* getVal() const;
+    SerializableBase* val() const;
 
     /**
      * @brief Safely unwrap a SerializableString object. If the object is not of the correct type a
@@ -714,6 +1493,54 @@ class Serializable: public SerializableBase {
      */
     SerializableByteBuffer asSerializableByteBuffer() const;
 
+    /**
+     * @brief Safely unwrap a SerializableDoubleNDArray object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableDoubleNDArray asSerializableDoubleNDArray() const;
+
+    /**
+     * @brief Safely unwrap a SerializableFloatNDArray object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableFloatNDArray asSerializableFloatNDArray() const;
+
+    /**
+     * @brief Safely unwrap a SerializableIntNDArray object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableIntNDArray asSerializableIntNDArray() const;
+
+    /**
+     * @brief Safely unwrap a SerializableLongNDArray object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableLongNDArray asSerializableLongNDArray() const;
+
+    /**
+     * @brief Safely unwrap a SerializableQueue object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableQueue<Serializable> asSerializableQueue() const;
+
+    /**
+     * @brief Safely unwrap a SerializableDDict object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableDDict<Serializable, Serializable> asSerializableDDict() const;
+
+    /**
+     * @brief Safely unwrap a SerializableBarrier object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableBarrier asSerializableBarrier() const;
+
+    /**
+     * @brief Safely unwrap a SerializableSemaphore object. If the object is not of the correct type a
+     * DragonError will be thrown.
+     */
+    SerializableSemaphore asSerializableSemaphore() const;
+
     bool operator==(const Serializable& other) const;
 
     bool operator!=(const Serializable& other) const;
@@ -747,48 +1574,105 @@ class Serializable: public SerializableBase {
         return asSerializableInt();
     }
     operator int() const {
-        return asSerializableInt().getVal();
+        return asSerializableInt().val();
     }
     operator SerializableDouble() const {
         return asSerializableDouble();
     }
     operator double() const {
-        return asSerializableDouble().getVal();
+        return asSerializableDouble().val();
     }
     operator std::string() const {
-        return asSerializableString().getVal();
+        return asSerializableString().val();
     }
     operator SerializableIntVector() const {
         return asSerializableIntVector();
     }
     operator std::vector<int>() const {
-        return asSerializableIntVector().getVal();
+        return asSerializableIntVector().val();
     }
     operator SerializableDoubleVector() const {
         return asSerializableDoubleVector();
     }
     operator std::vector<double>() const {
-        return asSerializableDoubleVector().getVal();
+        return asSerializableDoubleVector().val();
     }
     operator Serializable2DIntMatrix() const {
         return asSerializable2DIntMatrix();
     }
     operator std::vector<std::vector<int>>() const {
-        return asSerializable2DIntMatrix().getVal();
+        return asSerializable2DIntMatrix().val();
     }
     operator Serializable2DDoubleMatrix() const {
         return asSerializable2DDoubleMatrix();
     }
     operator std::vector<std::vector<double>>() const {
-        return asSerializable2DDoubleMatrix().getVal();
+        return asSerializable2DDoubleMatrix().val();
     }
     operator SerializableByteBuffer() const {
         return asSerializableByteBuffer();
     }
+    operator SerializableDoubleNDArray() const {
+        return asSerializableDoubleNDArray();
+    }
+    operator SerializableFloatNDArray() const {
+        return asSerializableFloatNDArray();
+    }
+    operator SerializableIntNDArray() const {
+        return asSerializableIntNDArray();
+    }
+    operator SerializableLongNDArray() const {
+        return asSerializableLongNDArray();
+    }
+    operator SerializableQueue<Serializable>() const {
+        return asSerializableQueue();
+    }
+
+    /**
+     * @brief Convert a received SerializableQueue directly into an attached Queue.
+     *
+     * This is defined in queue.hpp because it requires the complete Queue template.
+     */
+    template<class Value>
+    operator Queue<Value>() const;
+
+    operator SerializableDDict<Serializable, Serializable>() const {
+        return asSerializableDDict();
+    }
+
+    /**
+     * @brief Convert a received SerializableDDict directly into an attached DDict.
+     *
+     * This is defined in dictionary.hpp because it requires the complete DDict template.
+     */
+    template<class Key, class Value>
+    operator DDict<Key, Value>() const;
+
+    operator SerializableBarrier() const {
+        return asSerializableBarrier();
+    }
+
+    operator SerializableSemaphore() const {
+        return asSerializableSemaphore();
+    }
+
+    /**
+     * @brief Convert a received SerializableBarrier directly into an attached Barrier.
+     *
+     * This is defined in barrier.hpp because it requires the complete Barrier class.
+     */
+    operator Barrier() const;
+
+    /**
+     * @brief Convert a received SerializableSemaphore directly into an attached Semaphore.
+     *
+     * This is defined in semaphore.hpp because it requires the complete Semaphore class.
+     */
+    operator Semaphore() const;
 
     private:
     static std::map<int, DeserializeFn> sDeserializers;
-    SerializableBase* mVal;
+    std::unique_ptr<SerializableBase> mVal;
 
 };
 

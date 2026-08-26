@@ -13,7 +13,6 @@ from ... import managed_memory as dmm
 from ...globalservices.channel import create, release_refcnt
 from ...localservices.options import ChannelOptions as ShepherdChannelOptions
 from ...infrastructure.channel_desc import ChannelOptions
-from ...infrastructure import connection as dconn
 from ...infrastructure import facts as dfacts
 from ...infrastructure import messages as dmsg
 from ...infrastructure import parameters as dparms
@@ -22,6 +21,7 @@ from ...launcher import util as dlutil
 from ...dlogging import util as dlogutil
 from ...utils import B64
 from ...infrastructure.parameters import this_process
+from ...infrastructure.queue import InfraQueue
 
 
 def set_pdeathsig():
@@ -79,7 +79,8 @@ class OutOfBand:
         # create tcp agents input and output channels
         output_ch = self.new_local_channel()
         input_ch = self.new_local_channel()
-        self.ta_input = dconn.Connection(outbound_initializer=input_ch, policy=dparms.POLICY_INFRASTRUCTURE)
+        self.ta_input = InfraQueue(main_channel=input_ch)
+        self.ta_output = InfraQueue(main_channel=output_ch)
 
         env = dict(os.environ)
 
@@ -96,8 +97,8 @@ class OutOfBand:
 
         args = args + [
             f"--oob-port={port}",
-            f"--ch-in-sdesc={B64.bytes_to_str(input_ch.serialize())}",
-            f"--ch-out-sdesc={B64.bytes_to_str(output_ch.serialize())}",
+            f"--ch-in-sdesc={self.ta_input.serialize()}",
+            f"--ch-out-sdesc={self.ta_output.serialize()}",
         ]
 
         self.log_sdesc = os.environ.get(dfacts.DRAGON_LOGGER_SDESC, None)
@@ -179,7 +180,7 @@ class OutOfBand:
         # halt the OOB transport agents
         if self.ta_started:
             halt_msg = dmsg.UserHaltOOB(tag=dlutil.next_tag())
-            self.ta_input.send(halt_msg.serialize())
+            self.ta_input.put(halt_msg)
 
         # clean up input/output channels used for OOB transport agents
         for ch in self.channels:

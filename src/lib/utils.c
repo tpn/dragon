@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -13,7 +14,6 @@
 #include <ctype.h>
 #include <math.h>
 #include <fcntl.h>
-#include <unistd.h>
 #include <errno.h>
 
 #ifdef __APPLE__
@@ -372,6 +372,97 @@ _get_hostid_from_k8s_podid(char *pod_uid, uint64_t *host_id)
     no_err_return(DRAGON_SUCCESS);
 }
 
+//
+
+#define HOST_ID_MAX_LEN 65
+
+// Helper function to validate if a string contains only valid hex characters
+int is_hex_string(const char *str, int min_len, int max_len) {
+    int len = strlen(str);
+    if (len < min_len || len > max_len) return 0;
+    for (int i = 0; i < len; i++) {
+        if (!isxdigit((unsigned char)str[i])) return 0;
+    }
+    return 1;
+}
+
+// Helper function to parse 64-character hex ID using a keyword anchor
+int extraction_search(const char *filepath, const char *anchor, char *output_id) {
+    FILE *file = fopen(filepath, "r");
+    if (!file) return 0;
+
+    #define MAX_LINE_LEN 1024
+    char line[MAX_LINE_LEN];
+    while (fgets(line, sizeof(line), file)) {
+        char *pos = strstr(line, anchor);
+        if (pos) {
+            // Move pointer past the anchor phrase
+            pos += strlen(anchor);
+
+            // Extract up to 64 hex characters
+            int count = 0;
+            while (count < 64 && isxdigit((unsigned char)pos[count])) {
+                output_id[count] = pos[count];
+                count++;
+            }
+            output_id[count] = '\0';
+
+            if (count == 64) {
+                fclose(file);
+                return 1; // Success
+            }
+        }
+    }
+    fclose(file);
+    return 0;
+}
+
+const char* get_container_id(char *id_buffer) {
+
+    // --- Strategy 0: Check POD_UID Environment Variable ---
+    char *pod_uid = getenv("POD_UID");
+    if (NULL != pod_uid) {
+        strncpy(id_buffer, pod_uid, HOST_ID_MAX_LEN - 1);
+        id_buffer[HOST_ID_MAX_LEN - 1] = '\0';
+        return id_buffer;
+    }
+
+    // --- Strategy 1: Check standard cgroup v1 paths ---
+    // Look for lines containing "docker/" followed by the 64-char ID
+    if (extraction_search("/proc/self/cgroup", "docker/", id_buffer)) return id_buffer;
+
+    // Look for systemd scope lines containing "docker-" followed by the 64-char ID
+    if (extraction_search("/proc/self/cgroup", "docker-", id_buffer)) return id_buffer;
+
+    // --- Strategy 2: Check mountinfo for OverlayFS paths (cgroup v2 fallback) ---
+    if (extraction_search("/proc/self/mountinfo", "/docker/containers/", id_buffer)) return id_buffer;
+
+    // --- Strategy 3: Check explicitly injected Environment Variables ---
+    const char *env_vars[] = {"CONTAINER_ID", "HOSTNAME"};
+    for (int i = 0; i < 2; i++) {
+        char *env_val = getenv(env_vars[i]);
+        if (env_val && is_hex_string(env_val, 12, 64)) {
+            strncpy(id_buffer, env_val, HOST_ID_MAX_LEN - 1);
+            id_buffer[HOST_ID_MAX_LEN - 1] = '\0';
+            return id_buffer;
+        }
+    }
+
+    // --- Strategy 4: Fallback to System Hostname ---
+    char hostname[256];
+    if (gethostname(hostname, sizeof(hostname)) == 0) {
+        if (is_hex_string(hostname, 12, 12)) {
+            strncpy(id_buffer, hostname, HOST_ID_MAX_LEN - 1);
+            id_buffer[HOST_ID_MAX_LEN - 1] = '\0';
+            return id_buffer;
+        }
+    }
+
+    return NULL;
+}
+
+//
+
 dragonULInt dg_hostid;
 dragonUInt dg_pid;
 atomic_uint dg_ctr;
@@ -383,18 +474,10 @@ dragon_host_id()
     if (dg_hostid_called == 0) {
 
         uint64_t lg_hostid;
-        char *k8s_pod_uid = getenv("POD_UID");
-
-        if (k8s_pod_uid != NULL) { // if we are within a Kubernetes Pod
-            char *pod_uid = strdup(k8s_pod_uid);
-
-            if (pod_uid == NULL) {
-                err_return(DRAGON_FAILURE, "Unable to copy the POD_UID environment variable.");
-            }
-            if (_get_hostid_from_k8s_podid(pod_uid, &lg_hostid) != DRAGON_SUCCESS)
+        char container_id[HOST_ID_MAX_LEN];
+        if (get_container_id(container_id)) {
+            if (_get_hostid_from_k8s_podid(container_id, &lg_hostid) != DRAGON_SUCCESS)
                 err_return(DRAGON_FAILURE, "Unable to generate host ID from Kubernetes pod UUID.");
-
-            free(pod_uid);
         }
         else {
             if (_get_hostid_from_bootid(&lg_hostid) != DRAGON_SUCCESS)

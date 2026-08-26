@@ -23,9 +23,9 @@ through the Queue with the proper serialization and deserialization.
     q.put(x);
     q.put(x);
     SerializableInt y = q.get();
-    assert(y.getVal() == x.getVal());
+    assert(y.val() == x.val());
     y = q.get();
-    assert(y.getVal() == x.getVal());
+    assert(y.val() == x.val());
 
 The Queue can be instantiated from multiple C++ processes and
 sending and receiving can occur across multiple nodes and multiple

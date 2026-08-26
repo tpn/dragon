@@ -21,17 +21,17 @@ endif
 INCLUDE = $(L_DRAGON_INCLUDE_DIR) -I ${VIRTUAL_ENV}/include
 LIBS = $(L_DRAGON_LIB_DIR)
 
-DRAGON_CPP_TEST_COMMON_DEPS = $(wildcard ../../src/include/dragon/*.hpp ../../src/include/dragon/*.h) ../../src/lib/libdragon.so
+DRAGON_CPP_TEST_COMMON_DEPS = $(wildcard ../../src/include/dragon/*.hpp ../../src/include/dragon/*.h ../../src/lib/libdragon.so)
 CPP_TEST_BINS = flimsgfrom flimsgto cpp_ddict cpp_queue cpp_semaphore cpp_barrier
 
-BIN_FILES = flimsgfrom flimsgto c_ddict cpp_ddict cpp_queue cpp_semaphore cpp_barrier
+BIN_FILES = flimsgfrom flimsgto c_ddict cpp_ddict cpp_queue cpp_semaphore cpp_barrier cpp_serializables
 
 %.c.o: %.c
 	$(CC) $(INCLUDE) $(CFLAGS) -c $< -o $@
 
 default: build
 
-build: flimsgfrom flimsgto c_ddict cpp_ddict cpp_queue cpp_semaphore cpp_barrier
+build: $(BIN_FILES)
 
 flimsgfrom: flimsgfrom.cpp $(DRAGON_CPP_TEST_COMMON_DEPS)
 	g++ $(INCLUDE) -std=c++14 -o flimsgfrom $< $(LIBS) -ldl
@@ -44,6 +44,9 @@ c_ddict: c_ddict.c
 
 cpp_ddict: cpp_ddict.cpp $(DRAGON_CPP_TEST_COMMON_DEPS)
 	g++ $(INCLUDE) -std=c++14 -o cpp_ddict $< $(LIBS) -ldl
+
+cpp_serializables: cpp_serializables.cpp $(DRAGON_CPP_TEST_COMMON_DEPS)
+	g++ $(INCLUDE) -std=c++14 -o cpp_serializables $< $(LIBS) -ldl
 
 cpp_queue: cpp_queue.cpp $(DRAGON_CPP_TEST_COMMON_DEPS)
 	g++ $(INCLUDE) -std=c++14 -o cpp_queue $< $(LIBS) -ldl

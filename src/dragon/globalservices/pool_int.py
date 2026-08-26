@@ -13,14 +13,14 @@ class PoolContext:
     """Everything to do with a single memory pool in global services.
 
 
-    This object manages all the transactions to a shepherd concerning
+    This object manages all the transactions to a local services concerning
     the lifecycle of a pool.
     """
 
-    def __init__(self, server, request, reply_channel, m_uid, node):
+    def __init__(self, server, request, reply_queue, m_uid, node):
         self.server = server
         self.request = request
-        self.reply_channel = reply_channel
+        self.reply_queue = reply_queue
         self.destroy_request = None
 
         self._descriptor = pool_desc.PoolDescriptor(node=node, m_uid=m_uid, name=request.user_name)
@@ -32,8 +32,8 @@ class PoolContext:
     def descriptor(self):
         return self._descriptor
 
-    def _mk_sh_pool_create(self, the_tag):
-        return dmsg.SHPoolCreate(
+    def _mk_ls_pool_create(self, the_tag):
+        return dmsg.LSPoolCreate(
             tag=the_tag,
             p_uid=dfacts.GS_PUID,
             r_c_uid=dfacts.GS_INPUT_CUID,
@@ -43,16 +43,16 @@ class PoolContext:
             attr=self.request.options.sattr,
         )
 
-    def mk_sh_pool_destroy(self, the_tag):
-        return dmsg.SHPoolDestroy(
+    def mk_ls_pool_destroy(self, the_tag):
+        return dmsg.LSPoolDestroy(
             tag=the_tag, p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, m_uid=self.descriptor.m_uid
         )
 
     @classmethod
-    def construct(cls, server, msg, reply_channel):
+    def construct(cls, server, msg, reply_queue):
         """Creates a PoolContext and registers it with the server.
 
-        This routine will send a message to the Shepherd and will leave
+        This routine will send a message to the Local Services and will leave
         a continuation in the server's pending messages table.
 
         Getting the reply channel as a parameter makes it easier
@@ -75,7 +75,7 @@ class PoolContext:
                     err=dmsg.GSPoolCreateResponse.Errors.ALREADY,
                     desc=existing_ctx.descriptor,
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 return False, None, None
 
             this_muid, auto_name = server.new_muid_and_default_name()
@@ -85,15 +85,15 @@ class PoolContext:
 
             which_node = server.choose_pool_node(msg)
 
-            context = cls(server, msg, reply_channel, this_muid, which_node)
+            context = cls(server, msg, reply_queue, this_muid, which_node)
 
             server.pool_names[msg.user_name] = this_muid
             server.pool_table[this_muid] = context
 
-            shep_hdl = server.shep_inputs[which_node]
+            ls_hdl = server.ls_inputs[which_node]
 
             outbound_tag = server.tag_inc()
-            shep_create_msg = context._mk_sh_pool_create(outbound_tag)
+            ls_create_msg = context._mk_ls_pool_create(outbound_tag)
 
             # In cases where we are sending a large amount of
             # messages, such as with the GSGroupCreate handler,
@@ -104,7 +104,7 @@ class PoolContext:
             # receiving messages to allow us to process responses
             # on the input queue.
 
-            server.pending_sends.put((shep_hdl, shep_create_msg.serialize()))
+            server.pending_sends.put((ls_hdl, ls_create_msg))
             return True, outbound_tag, context
 
         except Exception as ex:
@@ -115,14 +115,14 @@ class PoolContext:
                 err_info=str(ex),
             )
 
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
 
     def complete_construction(self, msg):
         """Completes construction of a PoolContext
 
         :return: True if it succeeded, False otherwise
         """
-        assert isinstance(msg, dmsg.SHPoolCreateResponse)
+        assert isinstance(msg, dmsg.LSPoolCreateResponse)
 
         if msg.Errors.SUCCESS == msg.err:
             self.descriptor.state = pool_desc.PoolDescriptor.State.ACTIVE
@@ -134,7 +134,7 @@ class PoolContext:
                 err=dmsg.GSPoolCreateResponse.Errors.SUCCESS,
                 desc=self.descriptor,
             )
-            self.reply_channel.send(response.serialize())
+            self.reply_queue.put(response)
 
             create_succeeded = True
 
@@ -151,19 +151,19 @@ class PoolContext:
             del self.server.pool_table[self.descriptor.m_uid]
             del self.server.pool_names[self.request.user_name]
 
-            self.reply_channel.send(response.serialize())
+            self.reply_queue.put(response)
             create_succeeded = False
         else:
             raise RuntimeError(f"got {str(msg)} err {msg.err} unknown")
 
         LOG.debug(f"create response sent, tag {response.tag} ref {response.ref} pending cleared")
 
-        self.reply_channel = None  # drop reference to reply channel obj
+        self.reply_queue = None  # drop reference to reply channel obj
 
         return create_succeeded
 
     @staticmethod
-    def destroy(server, msg, reply_channel):
+    def destroy(server, msg, reply_queue):
         """Handle request to destroy a context.
 
         Feature we lack but that we might want:
@@ -174,7 +174,7 @@ class PoolContext:
 
         :param server:
         :param msg: a GSPoolDestroyResponse
-        :param reply_channel: object one can send the response to
+        :param reply_queue: object one can send the response to
         :return: True if a destroy request got issued False otherwise.
         """
         target_uid, found, errmsg = server.resolve_muid(msg.user_name, msg.m_uid)
@@ -182,7 +182,7 @@ class PoolContext:
 
         if not found:
             rm = gspdr(tag=server.tag_inc(), ref=msg.tag, err=gspdr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown: response to {msg}: {rm}")
             return False
         else:
@@ -191,27 +191,28 @@ class PoolContext:
             pds = pool_desc.PoolDescriptor.State
             if pds.DEAD == pooldesc.state:
                 rm = gspdr(tag=server.tag_inc(), ref=msg.tag, err=gspdr.Errors.GONE)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"gone; response to {msg}: {rm}")
                 return False
             elif pds.PENDING == pooldesc.state:
                 rm = gspdr(
                     tag=server.tag_inc(), ref=msg.tag, err=gspdr.Errors.PENDING, err_info=f"{target_uid} is pending"
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"pending; response to {msg}: {rm}")
                 return False
             elif pds.ACTIVE == pooldesc.state:
                 the_tag = server.tag_inc()
-                poolctx.reply_channel = reply_channel
+                poolctx.reply_queue = reply_queue
                 poolctx.destroy_request = msg
                 poolctx.descriptor.state = pds.PENDING  # might want a PENDING_DESTRUCTION state?
-                shep_destroy_msg = poolctx.mk_sh_pool_destroy(the_tag)
+                ls_destroy_msg = poolctx.mk_ls_pool_destroy(the_tag)
                 target_node = pooldesc.node
                 server.pending[the_tag] = poolctx.complete_destruction
-                server.pending_sends.put((server.shep_inputs[target_node], shep_destroy_msg.serialize()))
+                ls_hdl = server.ls_inputs[target_node]
+                server.pending_sends.put((ls_hdl, ls_destroy_msg))
 
-                LOG.debug(f"forwarded destroy {msg} as {shep_destroy_msg} to {target_node}")
+                LOG.debug(f"forwarded destroy {msg} as {ls_destroy_msg} to {target_node}")
                 return True
             else:
                 raise NotImplementedError("bad case")
@@ -223,14 +224,14 @@ class PoolContext:
         :return: True if the destroy succeeded False otherwise.
         """
         gspdr = dmsg.GSPoolDestroyResponse
-        shpdr = dmsg.SHPoolDestroyResponse
+        lspdr = dmsg.LSPoolDestroyResponse
 
-        if shpdr.Errors.FAIL == msg.err:
+        if lspdr.Errors.FAIL == msg.err:
             rm = gspdr(
                 tag=self.server.tag_inc(), ref=self.destroy_request.tag, err=gspdr.Errors.FAIL, err_info=msg.err_info
             )
             destroy_succeeded = False
-        elif shpdr.Errors.SUCCESS == msg.err:
+        elif lspdr.Errors.SUCCESS == msg.err:
             self.descriptor.state = pool_desc.PoolDescriptor.State.DEAD
             rm = gspdr(tag=self.server.tag_inc(), ref=self.destroy_request.tag, err=gspdr.Errors.SUCCESS)
             destroy_succeeded = True
@@ -238,5 +239,5 @@ class PoolContext:
             raise NotImplementedError("no case")
 
         LOG.debug(f"pool destroy response to {self.destroy_request}: {rm}")
-        self.reply_channel.send(rm.serialize())
+        self.reply_queue.put(rm)
         return destroy_succeeded

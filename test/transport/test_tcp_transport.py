@@ -386,6 +386,12 @@ class SingleNodeTransportBench(unittest.TestCase):
         self.assertEqual(q.size(), 1, "We could not get the proper size from a queue on a remote channel.")
         x = q.get()
         self.assertEqual(x, y, "The Queue implementation did not pass a list correctly through it.")
+
+        direct_payload = bytes(10000)
+        q.put(direct_payload, flush=True)
+        self.assertEqual(q.size(), 1, "The direct payload was not deposited into the remote queue channel.")
+        self.assertEqual(q.get(), direct_payload)
+
         y = ["a", "b", "c"]
         q.put(y)
         x = q.get()

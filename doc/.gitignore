@@ -17,5 +17,6 @@ ref/workflows/dragon*.rst
 ref/native/Python/dragon*.rst
 ref/ai/inference/*.rst
 ref/ai/agent/*.rst
+ref/ai/langgraph/dragon*.rst
 *.svg
 internal/services/transport_agent/tcp/*

@@ -80,7 +80,23 @@ class HitlTcpBridge(threading.Thread):
                         wfile = conn.makefile("w")
                         _log.info("HITL Bridge: Client connected from %s", addr)
                     except socket.timeout:
+                        # Nothing connected within the poll interval — loop
+                        # back and re-check the shutdown flag.
                         continue
+                    except Exception as exc:
+                        # Anything else means this listening socket can no
+                        # longer serve clients: it was closed underneath us
+                        # during shutdown, or accept() failed for good (out of
+                        # file descriptors, for instance).  Retrying would spin
+                        # a hot loop, and letting the error propagate would
+                        # kill the thread noisily, so break and let the
+                        # finally-block clean up.
+                        if not self._shutdown.is_set():
+                            _log.error(
+                                "HITL Bridge: accept() failed, bridge stopping: %s",
+                                exc, exc_info=True,
+                            )
+                        break
 
                 # --- Read from Dragon Queue (intra-runtime) ---------------
                 try:
@@ -175,15 +191,35 @@ class HitlTcpBridge(threading.Thread):
                     conn.close()
                 except Exception as exc:
                     _log.warning("HITL Bridge: Connection close failed: %s", exc)
-            self._server_sock.close()
+            self._close_server_sock()
 
-    def stop(self) -> None:
-        """Signal the bridge to shut down and wait for the thread to finish."""
-        self._shutdown.set()
-        # Close the server socket to unblock a potential accept() call,
-        # matching the pattern used by TraceTcpBridge.stop().
+    def _close_server_sock(self) -> None:
+        """Close the listening socket, best effort and idempotent."""
         try:
             self._server_sock.close()
         except Exception as exc:
-            _log.warning("HITL Bridge: server_sock.close in stop() failed: %s", exc)
+            _log.warning("HITL Bridge: server_sock close failed: %s", exc)
+
+    def stop(self) -> None:
+        """Signal the bridge to shut down and wait for the thread to finish.
+
+        We do **not** close the listening socket here.  The bridge thread may
+        still be waiting on it for a client to connect, and closing a socket
+        that another thread is using makes that wait fail with "Bad file
+        descriptor" — and lets the OS immediately reuse the slot for some
+        other connection.  Instead, just set the flag: the bridge thread stops
+        waiting once a second to check it, so it will notice, leave its loop,
+        and close its own socket.
+        """
+        self._shutdown.set()
+
+        if self.ident is None:
+            # Never started, so run()'s finally-block will never execute and
+            # nothing else owns the listening socket. Close it here so the
+            # fd is not leaked.
+            self._close_server_sock()
+            return
+
+        # Started: the thread owns the socket and closes it in run()'s
+        # finally-block, so all we do is wait for it.
         self.join(timeout=5)

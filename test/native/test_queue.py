@@ -27,13 +27,16 @@ def _putter(env_str):
 
     q.put(item)
 
+
 def _getter(q):
     q.get()
+
 
 def _getter_two_items(qin, qout):
     x = qin.get()
     qout.put(x)
     qin.get()
+
 
 def _joiner(env_str):
 
@@ -132,6 +135,22 @@ class TestQueue(unittest.TestCase):
         x = q.get()
         self.assertEqual(x, 42)
 
+    def test_put_get_direct_byte_payloads(self):
+        q = Queue()
+
+        expected_bytes = b"direct bytes"
+        expected_bytearray = bytearray(b"direct bytearray")
+        q.put(expected_bytes)
+        q.put(expected_bytearray)
+
+        received_bytes = q.get()
+        received_bytearray = q.get()
+        self.assertIs(type(received_bytes), bytes)
+        self.assertEqual(received_bytes, expected_bytes)
+        self.assertIs(type(received_bytearray), bytearray)
+        self.assertEqual(received_bytearray, expected_bytearray)
+        q.destroy()
+
     def test_simple(self):
         """Test basic functionality"""
 
@@ -211,13 +230,17 @@ class TestQueue(unittest.TestCase):
         proc = mp.Process(target=_getter, args=(q,))
         proc.start()
         proc.join()
-        del q # This is non-blocking, hence the need for the loop below.
+        del q  # This is non-blocking, hence the need for the loop below.
         after_space = 0
         iter = 0
         while after_space != before_space:
-            time.sleep(0.1) # Make sure we yield when we are running with a single process for Dragon.
+            time.sleep(0.1)  # Make sure we yield when we are running with a single process for Dragon.
             after_space = mpool.free_space
-            self.assertTrue(iter < 100, "We timed out waiting for the channel allocation to be freed. Memory leak or other freeing issue.")
+            self.assertLess(
+                iter,
+                100,
+                "We timed out waiting for the channel allocation to be freed. Memory leak or other freeing issue.",
+            )
             iter += 1
 
         mpool.deregister()

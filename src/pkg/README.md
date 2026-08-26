@@ -21,6 +21,20 @@ do a `pip install`:
 After doing the `pip install` of the package, you have
 completed the prerequisites for running Dragon multiprocessing programs.
 
+If running in a multi-node environment with a high speed interconnect, you'll
+need to configure dragon to use the interconnect's libraries. Some example
+configuration commands appear below. For more information, see the
+"Configuring Dragon's high performance network backend for HSTA" section
+below:
+
+```
+# For a UCX backend, provide a library path that contains a libucp.so:
+dragon-config add --ucx-runtime-lib=/opt/nvidia/hpc_sdk/Linux_x86_64/23.11/comm_libs/12.3/hpcx/hpcx-2.16/ucx/prof/lib
+
+# For an OFI backend, provide a library path that contains a libfabric.so:
+dragon-config add --ofi-runtime-lib=/opt/cray/libfabric/1.22.0/lib64
+```
+
 Dragon is built with `manylinux_2_28` support and should function on most Linux
 distros.
 
@@ -190,7 +204,7 @@ DRAGON_DEFAULT_SEG_SZ - Set to the number of bytes for the default Managed Memor
 Requirements
 ------------
 
-- Python >= 3.10
+- Python >= 3.11
 - GCC 9 or later
 - Slurm or PBS+PALS (for multi-node Dragon)
 

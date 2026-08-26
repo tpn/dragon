@@ -240,6 +240,7 @@ class TestFileRedirection(unittest.TestCase):
 
         with open(outfile, "rb") as f:
             content = f.read()
+        print(f"content = {content}", flush=True)
         self.assertIn(b"first", content)
         self.assertIn(b"second", content)
 

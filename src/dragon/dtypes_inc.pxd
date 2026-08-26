@@ -621,6 +621,14 @@ cdef extern from "dragon/serializable_types.h":
         SERTYPE_INTMATRIX
         SERTYPE_DOUBLEMATRIX
         SERTYPE_BYTEBUFFER
+        SERTYPE_DOUBLENDARRAY
+        SERTYPE_FLOATNDARRAY
+        SERTYPE_INTNDARRAY
+        SERTYPE_LONGNDARRAY
+        SERTYPE_QUEUE
+        SERTYPE_DDICT
+        SERTYPE_BARRIER
+        SERTYPE_SEMAPHORE
 
 cdef extern from "dragon/perf.h":
 
@@ -688,6 +696,8 @@ cdef extern from "dragon/fli.h":
     dragonError_t dragon_fli_new_task(const dragonFLIDescr_t* adapter, const timespec_t* timeout) nogil
     dragonError_t dragon_fli_task_done(const dragonFLIDescr_t* adapter, const timespec_t* timeout) nogil
     dragonError_t dragon_fli_join(const dragonFLIDescr_t* adapter, const timespec_t* timeout) nogil
+    dragonError_t dragon_fli_poll(const dragonFLIDescr_t* adapter, const timespec_t* timeout) nogil
+    dragonError_t dragon_fli_main_channel_cuid(const dragonFLIDescr_t* adapter, dragonC_UID_t* cuid) nogil
     dragonError_t dragon_fli_send_attr_init(dragonFLISendAttr_t* attrs)
     dragonError_t dragon_fli_open_send_handle(const dragonFLIDescr_t* adapter, dragonFLISendHandleDescr_t* send_handle,
                                               dragonChannelDescr_t* strm_ch, dragonFLISendAttr_t* attrs, const timespec_t* timeout) nogil

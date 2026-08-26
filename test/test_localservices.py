@@ -23,6 +23,7 @@ import dragon.dlogging.util as dlog
 import dragon.utils as du
 
 import support.util as tsu
+from dragon.infrastructure.queue import InfraQueue
 
 get_msg = tsu.get_and_parse
 
@@ -81,9 +82,9 @@ class SingleLS(unittest.TestCase):
         )
         self.proc.start()
 
-        self.shep_stdin_wh.send(dmsg.BENodeIdxSH(tag=self.next_tag(), node_idx=0, net_conf_key="0").serialize())
+        self.shep_stdin_wh.send(dmsg.BENodeIdxLS(tag=self.next_tag(), node_idx=0, net_conf_key="0").serialize())
 
-        msg = tsu.get_and_check_type(self.shep_stdout_rh, dmsg.SHPingBE)
+        msg = tsu.get_and_check_type(self.shep_stdout_rh, dmsg.LSPingBE)
 
         if ATTACH_POOLS:
             default_pd = du.B64.str_to_bytes(msg.default_pd)
@@ -92,28 +93,21 @@ class SingleLS(unittest.TestCase):
             inf_pd = du.B64.str_to_bytes(msg.inf_pd)
             self.inf_pool = dmm.MemoryPool.attach(inf_pd)
 
-        shep_cd = du.B64.str_to_bytes(msg.shep_cd)
-        self.shep_ch = dch.Channel.attach(shep_cd)
-        self.shep_main_wh = dconn.Connection(outbound_initializer=self.shep_ch)
+        # ls_cd, be_cd, gs_cd are InfraQueue descriptors
+        self.ls_main_wh = InfraQueue.attach(msg.ls_cd)
+        self.be_main_rh = InfraQueue.attach(msg.be_cd)
+        self.gs_main_rh = InfraQueue.attach(msg.gs_qd)
 
-        be_cd = du.B64.str_to_bytes(msg.be_cd)
-        self.be_ch = dch.Channel.attach(be_cd)
-        self.be_main_rh = dconn.Connection(inbound_initializer=self.be_ch)
+        self.ls_main_wh.put(dmsg.BEPingLS(tag=0))
 
-        gs_cd = du.B64.str_to_bytes(msg.gs_cd)
-        self.gs_ch = dch.Channel.attach(gs_cd)
-        self.gs_main_rh = dconn.Connection(inbound_initializer=self.gs_ch)
+        tsu.get_and_check_type(self.be_main_rh, dmsg.LSChannelsUp)
 
-        self.shep_main_wh.send(dmsg.BEPingSH(tag=0).serialize())
+        self.ls_main_wh.put(dmsg.GSPingLS(tag=0))
 
-        tsu.get_and_check_type(self.be_main_rh, dmsg.SHChannelsUp)
-
-        self.shep_main_wh.send(dmsg.GSPingSH(tag=0).serialize())
-
-        tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPingGS)
+        tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPingGS)
 
     def do_teardown(self):
-        self.shep_main_wh.send(dmsg.GSHalted(tag=self.next_tag()).serialize())
+        self.ls_main_wh.put(dmsg.GSHalted(tag=self.next_tag()))
         count = 0
         msg = get_msg(self.be_main_rh)
 
@@ -122,21 +116,22 @@ class SingleLS(unittest.TestCase):
             msg = get_msg(self.be_main_rh)
             count += 1
 
-        self.shep_main_wh.send(dmsg.SHTeardown(tag=self.next_tag()).serialize())
+        self.ls_main_wh.put(dmsg.LSTeardown(tag=self.next_tag()))
 
         count = 0
         msg = get_msg(self.be_main_rh)
 
-        # keep ignoring everything received other than SHHaltBE
-        while not isinstance(msg, dmsg.SHHaltBE) and count < 100:
+        # keep ignoring everything received other than LSHaltBE
+        while not isinstance(msg, dmsg.LSHaltBE) and count < 100:
             msg = get_msg(self.be_main_rh)
             count += 1
 
         self.shep_stdin_wh.send(dmsg.BEHalted(tag=self.next_tag()).serialize())
-        tsu.get_and_check_type(self.shep_stdout_rh, dmsg.SHHalted)
+        tsu.get_and_check_type(self.shep_stdout_rh, dmsg.LSHalted)
 
         self.proc.join()
 
+        # TODO CPW: Ask Kent about this. We could change the closes to destroys but these Queue's are not owned by this process so I think close is the right thing. I checked and there isn't any files left around so I think it's okay.
         # In place of the next three destroy calls we could have called
         # detach, but this demonstrates that we can call destroy twice
         # on a channel and it will work. Local services destroyed first,
@@ -145,17 +140,17 @@ class SingleLS(unittest.TestCase):
         # done with the channel, destroy will ignore any ref counting and clean
         # it up.
         try:
-            self.gs_ch.destroy()
+            self.gs_main_rh.close()
         except:
             pass
 
         try:
-            self.be_ch.destroy()
+            self.be_main_rh.close()
         except:
             pass
 
         try:
-            self.shep_ch.destroy()
+            self.ls_main_wh.close()
         except:
             pass
 
@@ -167,28 +162,28 @@ class SingleLS(unittest.TestCase):
             self.inf_pool.destroy()
 
     def do_abnormal_teardown(self):
-        # when the BE receives AbnormalTermination, then the SHTeardown proceeds as usual
-        # and LS expects SHTeardown in order to shut down
+        # when the BE receives AbnormalTermination, then the LSTeardown proceeds as usual
+        # and LS expects LSTeardown in order to shut down
         tsu.get_and_check_type(self.be_main_rh, dmsg.AbnormalTermination)
-        self.shep_main_wh.send(dmsg.SHTeardown(tag=self.next_tag()).serialize())
-        tsu.get_and_check_type(self.be_main_rh, dmsg.SHHaltBE)
+        self.ls_main_wh.put(dmsg.LSTeardown(tag=self.next_tag()))
+        tsu.get_and_check_type(self.be_main_rh, dmsg.LSHaltBE)
         self.shep_stdin_wh.send(dmsg.BEHalted(tag=self.next_tag()).serialize())
-        tsu.get_and_check_type(self.shep_stdout_rh, dmsg.SHHalted)
+        tsu.get_and_check_type(self.shep_stdout_rh, dmsg.LSHalted)
 
         self.proc.join()
 
         try:
-            self.gs_ch.detach()
+            self.gs_main_rh.close()
         except:
             pass
 
         try:
-            self.be_ch.detach()
+            self.be_main_rh.close()
         except:
             pass
 
         try:
-            self.shep_ch.detach()
+            self.ls_main_wh.close()
         except:
             pass
 
@@ -200,17 +195,17 @@ class SingleLS(unittest.TestCase):
             self.inf_pool.destroy()
 
     def _make_pool(self, tag, p_uid, r_c_uid, size, m_uid, name):
-        self.shep_main_wh.send(
-            dmsg.SHPoolCreate(tag=tag, p_uid=p_uid, r_c_uid=r_c_uid, size=size, m_uid=m_uid, name=name).serialize()
+        self.ls_main_wh.put(
+            dmsg.LSPoolCreate(tag=tag, p_uid=p_uid, r_c_uid=r_c_uid, size=size, m_uid=m_uid, name=name)
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolCreateResponse)
-        self.assertEqual(dmsg.SHPoolCreateResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolCreateResponse)
+        self.assertEqual(dmsg.LSPoolCreateResponse.Errors.SUCCESS, res.err)
 
     def _destroy_pool(self, tag, p_uid, r_c_uid, m_uid):
         # Destroy the pool
-        self.shep_main_wh.send(dmsg.SHPoolDestroy(tag=tag, p_uid=p_uid, r_c_uid=r_c_uid, m_uid=m_uid).serialize())
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolDestroyResponse)
-        self.assertEqual(dmsg.SHPoolDestroyResponse.Errors.SUCCESS, res.err)
+        self.ls_main_wh.put(dmsg.LSPoolDestroy(tag=tag, p_uid=p_uid, r_c_uid=r_c_uid, m_uid=m_uid))
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolDestroyResponse)
+        self.assertEqual(dmsg.LSPoolDestroyResponse.Errors.SUCCESS, res.err)
 
     def test_bringup_teardown(self):
         # Tests normal bringup followed by teardown.
@@ -222,30 +217,30 @@ class SingleLS(unittest.TestCase):
         target_puid = 17777
 
         the_tag = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/proc2.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput, timeout=5)
+        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput, timeout=5)
 
         if process_output == "Hello World\n":
-            process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput, timeout=5)
+            process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput, timeout=5)
             self.assertEqual(process_output.data, "Doing some more\n")
         else:
             self.assertEqual(process_output.data, "Hello World\nDoing some more\n")
 
-        tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessExit)
+        tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessExit)
         self.do_teardown()
 
     def test_process_fwdinput(self):
@@ -253,37 +248,37 @@ class SingleLS(unittest.TestCase):
 
         target_puid = 17777
         the_tag = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/proc4.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        self.shep_main_wh.send(
-            dmsg.SHFwdInput(
+        self.ls_main_wh.put(
+            dmsg.LSFwdInput(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 t_p_uid=target_puid,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 input="Hi There\n",
                 confirm=True,
-            ).serialize()
+            )
         )
 
-        tsu.get_and_check_type(self.gs_main_rh, dmsg.SHFwdInputErr)
+        tsu.get_and_check_type(self.gs_main_rh, dmsg.LSFwdInputErr)
 
         output = ""
         try:
-            msg = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput)
+            msg = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput)
             output += msg.data
         except TimeoutError:
             pass
@@ -296,41 +291,41 @@ class SingleLS(unittest.TestCase):
         self.do_bringup()
 
         test_muid = 123456
-        self.shep_main_wh.send(
-            dmsg.SHPoolCreate(
+        self.ls_main_wh.put(
+            dmsg.LSPoolCreate(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 size=self.DEFAULT_TEST_POOL_SIZE,
                 m_uid=test_muid,
                 name="single_shep_test",
-            ).serialize()
+            )
         )
 
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolCreateResponse)
-        self.assertEqual(dmsg.SHPoolCreateResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolCreateResponse)
+        self.assertEqual(dmsg.LSPoolCreateResponse.Errors.SUCCESS, res.err)
 
-        self.shep_main_wh.send(
-            dmsg.SHPoolDestroy(
+        self.ls_main_wh.put(
+            dmsg.LSPoolDestroy(
                 tag=self.next_tag(), p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, m_uid=test_muid
-            ).serialize()
+            )
         )
 
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolDestroyResponse)
-        self.assertEqual(dmsg.SHPoolDestroyResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolDestroyResponse)
+        self.assertEqual(dmsg.LSPoolDestroyResponse.Errors.SUCCESS, res.err)
 
         self.do_teardown()
 
     def test_sh_pool_invalid_destroy(self):
         self.do_bringup()
         test_muid = 123456
-        self.shep_main_wh.send(
-            dmsg.SHPoolDestroy(
+        self.ls_main_wh.put(
+            dmsg.LSPoolDestroy(
                 tag=self.next_tag(), p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, m_uid=test_muid
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolDestroyResponse)
-        self.assertEqual(dmsg.SHPoolDestroyResponse.Errors.FAIL, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolDestroyResponse)
+        self.assertEqual(dmsg.LSPoolDestroyResponse.Errors.FAIL, res.err)
 
         self.do_teardown()
 
@@ -338,42 +333,42 @@ class SingleLS(unittest.TestCase):
         self.do_bringup()
         test_muid = 123456
 
-        self.shep_main_wh.send(
-            dmsg.SHPoolCreate(
+        self.ls_main_wh.put(
+            dmsg.LSPoolCreate(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 size=self.DEFAULT_TEST_POOL_SIZE,
                 m_uid=test_muid,
                 name="single_shep_test",
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolCreateResponse)
-        self.assertEqual(dmsg.SHPoolCreateResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolCreateResponse)
+        self.assertEqual(dmsg.LSPoolCreateResponse.Errors.SUCCESS, res.err)
 
-        self.shep_main_wh.send(
-            dmsg.SHPoolCreate(
+        self.ls_main_wh.put(
+            dmsg.LSPoolCreate(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 size=self.DEFAULT_TEST_POOL_SIZE,
                 m_uid=test_muid,
                 name="single_shep_test",
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolCreateResponse)
-        self.assertEqual(dmsg.SHPoolCreateResponse.Errors.FAIL, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolCreateResponse)
+        self.assertEqual(dmsg.LSPoolCreateResponse.Errors.FAIL, res.err)
 
         # Destroy the pool
-        self.shep_main_wh.send(
-            dmsg.SHPoolDestroy(
+        self.ls_main_wh.put(
+            dmsg.LSPoolDestroy(
                 tag=self.next_tag(), p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, m_uid=test_muid
-            ).serialize()
+            )
         )
 
         # Check we succeeded so we know if other tests fail after this
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHPoolDestroyResponse)
-        self.assertEqual(dmsg.SHPoolDestroyResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSPoolDestroyResponse)
+        self.assertEqual(dmsg.LSPoolDestroyResponse.Errors.SUCCESS, res.err)
 
         self.do_teardown()
 
@@ -391,25 +386,25 @@ class SingleLS(unittest.TestCase):
             "single_shep_test",
         )
 
-        self.shep_main_wh.send(
-            dmsg.SHChannelCreate(
+        self.ls_main_wh.put(
+            dmsg.LSChannelCreate(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 m_uid=test_muid,
                 c_uid=test_cuid,
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHChannelCreateResponse)
-        self.assertEqual(dmsg.SHChannelCreateResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSChannelCreateResponse)
+        self.assertEqual(dmsg.LSChannelCreateResponse.Errors.SUCCESS, res.err)
 
-        self.shep_main_wh.send(
-            dmsg.SHChannelDestroy(
+        self.ls_main_wh.put(
+            dmsg.LSChannelDestroy(
                 tag=self.next_tag(), p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, c_uid=test_cuid
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHChannelDestroyResponse)
-        self.assertEqual(dmsg.SHChannelDestroyResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSChannelDestroyResponse)
+        self.assertEqual(dmsg.LSChannelDestroyResponse.Errors.SUCCESS, res.err)
 
         self._destroy_pool(self.next_tag(), dfacts.GS_PUID, dfacts.GS_INPUT_CUID, test_muid)
 
@@ -430,37 +425,37 @@ class SingleLS(unittest.TestCase):
         )
 
         # Make a channel
-        self.shep_main_wh.send(
-            dmsg.SHChannelCreate(
+        self.ls_main_wh.put(
+            dmsg.LSChannelCreate(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 m_uid=test_muid,
                 c_uid=test_cuid,
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHChannelCreateResponse)
-        self.assertEqual(dmsg.SHChannelCreateResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSChannelCreateResponse)
+        self.assertEqual(dmsg.LSChannelCreateResponse.Errors.SUCCESS, res.err)
 
-        self.shep_main_wh.send(
-            dmsg.SHChannelCreate(
+        self.ls_main_wh.put(
+            dmsg.LSChannelCreate(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 m_uid=test_muid,
                 c_uid=test_cuid,
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHChannelCreateResponse)
-        self.assertEqual(dmsg.SHChannelCreateResponse.Errors.FAIL, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSChannelCreateResponse)
+        self.assertEqual(dmsg.LSChannelCreateResponse.Errors.FAIL, res.err)
 
-        self.shep_main_wh.send(
-            dmsg.SHChannelDestroy(
+        self.ls_main_wh.put(
+            dmsg.LSChannelDestroy(
                 tag=self.next_tag(), p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, c_uid=test_cuid
-            ).serialize()
+            )
         )
-        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHChannelDestroyResponse)
-        self.assertEqual(dmsg.SHChannelDestroyResponse.Errors.SUCCESS, res.err)
+        res = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSChannelDestroyResponse)
+        self.assertEqual(dmsg.LSChannelDestroyResponse.Errors.SUCCESS, res.err)
 
         self._destroy_pool(self.next_tag(), dfacts.GS_PUID, dfacts.GS_INPUT_CUID, test_muid)
 
@@ -470,18 +465,18 @@ class SingleLS(unittest.TestCase):
         self.do_bringup()
         target_puid = 177
 
-        self.shep_main_wh.send(
-            dmsg.SHFwdInput(
+        self.ls_main_wh.put(
+            dmsg.LSFwdInput(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 confirm=True,
                 t_p_uid=target_puid,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 input="Hi There\n",
-            ).serialize()
+            )
         )
 
-        tsu.get_and_check_type(self.gs_main_rh, dmsg.SHFwdInputErr)
+        tsu.get_and_check_type(self.gs_main_rh, dmsg.LSFwdInputErr)
 
         self.do_teardown()
 
@@ -489,145 +484,145 @@ class SingleLS(unittest.TestCase):
         self.do_bringup()
         the_tag = self.next_tag()
         target_puid = 177
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["missing_prog.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        process_exit = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessExit)
+        process_exit = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessExit)
 
         self.assertEqual(process_exit.exit_code, 2)
 
-        tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput)
+        tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput)
 
         self.do_teardown()
 
     def test_dump_state(self):
         self.do_bringup()
-        self.shep_main_wh.send(dmsg.SHDumpState(tag=self.next_tag()).serialize())
+        self.ls_main_wh.put(dmsg.LSDumpState(tag=self.next_tag()))
         self.do_teardown()
 
     def test_dump_state_to_file(self):
         self.do_bringup()
-        self.shep_main_wh.send(dmsg.SHDumpState(tag=self.next_tag(), filename="shep_dump.log").serialize())
+        self.ls_main_wh.put(dmsg.LSDumpState(tag=self.next_tag(), filename="shep_dump.log"))
         self.do_teardown()
 
     def test_process_kill(self):
         self.do_bringup()
         target_puid = 177
         the_tag = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/proc2.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput, timeout=5)
+        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput, timeout=5)
 
-        self.shep_main_wh.send(
-            dmsg.SHProcessKill(
+        self.ls_main_wh.put(
+            dmsg.LSProcessKill(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 t_p_uid=target_puid,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 sig=signal.SIGKILL,
-            ).serialize()
+            )
         )
 
         if process_output.data == "Hello World\n":
-            process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput, timeout=5)
+            process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput, timeout=5)
             self.assertEqual(process_output.data, "Doing some more\n")
         else:
             self.assertEqual(process_output.data, "Hello World\nDoing some more\n")
 
         msg = tsu.get_and_parse(self.gs_main_rh)
-        self.assertTrue(isinstance(msg, dmsg.SHProcessExit) or isinstance(msg, dmsg.SHProcessKillResponse))
+        self.assertTrue(isinstance(msg, dmsg.LSProcessExit) or isinstance(msg, dmsg.LSProcessKillResponse))
         self.do_teardown()
 
     def test_process_kill_wait(self):
         self.do_bringup()
         target_puid = 177
         the_tag = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/proc3.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        self.shep_main_wh.send(
-            dmsg.SHProcessKill(
+        self.ls_main_wh.put(
+            dmsg.LSProcessKill(
                 tag=self.next_tag(),
                 p_uid=dfacts.GS_PUID,
                 t_p_uid=target_puid,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 sig=signal.SIGKILL,
-            ).serialize()
+            )
         )
 
         msg = tsu.get_and_parse(self.gs_main_rh)
-        self.assertTrue(isinstance(msg, dmsg.SHProcessExit) or isinstance(msg, dmsg.SHProcessKillResponse))
+        self.assertTrue(isinstance(msg, dmsg.LSProcessExit) or isinstance(msg, dmsg.LSProcessKillResponse))
         self.do_teardown()
 
     def test_bringup_abnormal_termination(self):
         self.do_bringup()
-        self.shep_main_wh.send(dmsg.AbnormalTermination(tag=self.next_tag()).serialize())
+        self.ls_main_wh.put(dmsg.AbnormalTermination(tag=self.next_tag()))
         self.do_abnormal_teardown()
 
     def test_bringup_bad_message(self):
         self.do_bringup()
-        self.shep_main_wh.send("crap")
+        self.ls_main_wh.put(tsu._BadMsg(tag=self.next_tag()))
         self.do_abnormal_teardown()
 
     def test_process_create(self):
         self.do_bringup()
         the_tag = self.next_tag()
         target_puid = 177
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/proc1.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         self.assertEqual(process_create_resp.ref, the_tag)
-        self.shep_main_wh.send(dmsg.SHDumpState(tag=self.next_tag()).serialize())
-        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput)
+        self.ls_main_wh.put(dmsg.LSDumpState(tag=self.next_tag()))
+        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput)
         self.assertEqual(process_output.data, "Hello World\n")
-        tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessExit, 5)
+        tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessExit, 5)
 
         self.do_teardown()
 
@@ -635,8 +630,8 @@ class SingleLS(unittest.TestCase):
         self.do_bringup()
         target_puid = 177
         the_tag = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/procenv1.py"],
@@ -644,18 +639,18 @@ class SingleLS(unittest.TestCase):
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        self.shep_main_wh.send(dmsg.SHDumpState(tag=0).serialize())
+        self.ls_main_wh.put(dmsg.LSDumpState(tag=0))
 
-        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput)
+        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput)
         self.assertEqual(process_output.data, "env_value\n")
 
-        process_done = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessExit, 5)
+        process_done = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessExit, 5)
         self.assertEqual(process_done.exit_code, 0)
 
         self.do_teardown()
@@ -664,8 +659,8 @@ class SingleLS(unittest.TestCase):
         self.do_bringup()
         target_puid = 177
         the_tag = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=the_tag,
                 exe=sys.executable,
                 args=["shepherd/procenv2.py"],
@@ -673,18 +668,18 @@ class SingleLS(unittest.TestCase):
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=target_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
         self.assertEqual(process_create_resp.ref, the_tag)
 
-        self.shep_main_wh.send(dmsg.SHDumpState(tag=self.next_tag()).serialize())
+        self.ls_main_wh.put(dmsg.LSDumpState(tag=self.next_tag()))
 
-        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.SHFwdOutput)
+        process_output = tsu.get_and_check_type(self.be_main_rh, dmsg.LSFwdOutput)
         self.assertEqual(process_output.data, "shell_value\n")
 
-        process_done = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessExit, 5)
+        process_done = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessExit, 5)
         self.assertEqual(process_done.exit_code, 0)
 
         self.do_teardown()
@@ -695,39 +690,39 @@ class SingleLS(unittest.TestCase):
         tag1 = self.next_tag()
         test_puid = 177
 
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=tag1,
                 exe=sys.executable,
                 args=["shepherd/proc1.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=test_puid,
-            ).serialize()
+            )
         )
 
         tag2 = self.next_tag()
-        self.shep_main_wh.send(
-            dmsg.SHProcessCreate(
+        self.ls_main_wh.put(
+            dmsg.LSProcessCreate(
                 tag=tag2,
                 exe=sys.executable,
                 args=["shepherd/proc1.py"],
                 p_uid=dfacts.GS_PUID,
                 r_c_uid=dfacts.GS_INPUT_CUID,
                 t_p_uid=test_puid,
-            ).serialize()
+            )
         )
 
-        process_create_resp1 = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+        process_create_resp1 = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
 
         if process_create_resp1.ref == tag1:
-            process_create_resp2 = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+            process_create_resp2 = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
             self.assertEqual(process_create_resp2.ref, tag2)
-            self.assertEqual(process_create_resp2.err, dmsg.SHProcessCreateResponse.Errors.FAIL)
+            self.assertEqual(process_create_resp2.err, dmsg.LSProcessCreateResponse.Errors.FAIL)
         else:
             self.assertEqual(process_create_resp1.ref, tag2)
-            self.assertEqual(process_create_resp1.err, dmsg.SHProcessCreateResponse.Errors.FAIL)
-            process_create_resp2 = tsu.get_and_check_type(self.gs_main_rh, dmsg.SHProcessCreateResponse)
+            self.assertEqual(process_create_resp1.err, dmsg.LSProcessCreateResponse.Errors.FAIL)
+            process_create_resp2 = tsu.get_and_check_type(self.gs_main_rh, dmsg.LSProcessCreateResponse)
             self.assertEqual(process_create_resp2.ref, tag1)
 
         self.do_teardown()

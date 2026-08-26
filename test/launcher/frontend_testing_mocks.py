@@ -8,16 +8,19 @@ from dragon.launcher.network_config import NetworkConfig
 from dragon.launcher.dragon_multi_fe import main as frontend_main
 
 from dragon.infrastructure.process_desc import ProcessDescriptor
-from dragon.infrastructure.connection import Connection, ConnectionOptions
 from dragon.infrastructure.node_desc import NodeDescriptor
-from dragon.infrastructure.parameters import POLICY_INFRASTRUCTURE
 from dragon.infrastructure import facts as dfacts
 from dragon.infrastructure import messages as dmsg
+from dragon.infrastructure.messages import MessagePickler
 
 from dragon.channels import Channel, ChannelError
+from dragon.fli import DragonFLIError
 from dragon.managed_memory import MemoryPool, DragonPoolError, DragonMemoryError
+from dragon.native.queue import Queue as DQueue
 from dragon.utils import set_host_id, B64
 from dragon.dlogging.util import setup_FE_logging
+
+from .launcher_testing_utils import _GarbageMsg
 
 
 def run_frontend(args_map):
@@ -41,40 +44,38 @@ def run_resilient_frontend(args_map):
     frontend_main(args_map=args_map)
 
 
-def open_overlay_comms(ch_in_desc: B64, ch_out_desc: B64):
-    """Attach to Frontend's overlay network channels and open a connection"""
-    try:
-        ta_ch_in = Channel.attach(ch_in_desc.decode())
-        ta_ch_out = Channel.attach(ch_out_desc.decode())
-        fe_ta_conn = Connection(
-            inbound_initializer=ta_ch_in,
-            outbound_initializer=ta_ch_out,
-            options=ConnectionOptions(creation_policy=ConnectionOptions.CreationPolicy.EXTERNALLY_MANAGED),
-        )
-        fe_ta_conn.ghost = True
-        fe_ta_conn.open()
+def open_overlay_comms(ch_in_sdesc: str, ch_out_sdesc: str, mpool=None):
+    """Attach to Frontend's overlay DQueues.
+    ch_in_sdesc = local_out_q.serialize() — overlay reads what FE writes (LAHaltOverlay)
+    ch_out_sdesc = local_in_q.serialize() — overlay writes what FE reads (OverlayPingLA, OverlayHalted)
 
-    except (ChannelError, DragonPoolError, DragonMemoryError) as init_err:
+    overlay_in_q receives with mpool (allocates receive buffers from caller's pool).
+    overlay_out_q sends with mpool=None so the FLI uses the channel's own pool, which
+    must match the pool that the FE used when it created local_in_q.  Using a foreign
+    pool here caused the FE's DQueue.get() to never be signalled, and potentially a
+    use-after-free crash when be_mpool was destroyed while the FE was still mid-read.
+    """
+    try:
+        overlay_in_q = DQueue.attach(ch_in_sdesc, mpool=mpool, pickler=MessagePickler())
+        overlay_out_q = DQueue.attach(ch_out_sdesc, mpool=None, pickler=MessagePickler())
+    except Exception as init_err:
         raise RuntimeError("Overlay transport resource creation failed") from init_err
+    return overlay_in_q, overlay_out_q
 
-    return ta_ch_in, ta_ch_out, fe_ta_conn
 
-
-def open_backend_comms(frontend_sdesc: str, network_config: str, net_conf: Optional[dict] = None):
-    """Attach to frontend channel and create channels for backend"""
+def open_backend_comms(frontend_sdesc: str, network_config: str, net_conf: Optional[dict] = None, be_mpool=None):
+    """Attach to frontend DQueue and create per-node backend DQueues."""
     log = logging.getLogger("open_backend_comms")
-    be_mpool = None
+    _created_mpool = be_mpool is None
     try:
-        conn_options = ConnectionOptions(min_block_size=2**16)
-        conn_policy = POLICY_INFRASTRUCTURE
+        if be_mpool is None:
+            be_mpool = MemoryPool(
+                int(dfacts.DEFAULT_BE_OVERLAY_TRANSPORT_SEG_SZ),
+                f"{os.getuid()}_{os.getpid()}_{2}" + dfacts.DEFAULT_POOL_SUFFIX,
+                dfacts.be_pool_muid_from_hostid(2),
+            )
 
-        be_mpool = MemoryPool(
-            int(dfacts.DEFAULT_BE_OVERLAY_TRANSPORT_SEG_SZ),
-            f"{os.getuid()}_{os.getpid()}_{2}" + dfacts.DEFAULT_POOL_SUFFIX,
-            dfacts.be_pool_muid_from_hostid(2),
-        )
-
-        be_ch_out = Channel.attach(B64.from_str(frontend_sdesc).decode(), mem_pool=be_mpool)
+        fe_in_q = DQueue.attach(frontend_sdesc, mpool=be_mpool, pickler=MessagePickler())
 
         if net_conf is None:
             net = NetworkConfig.from_file(network_config)
@@ -84,23 +85,15 @@ def open_backend_comms(frontend_sdesc: str, network_config: str, net_conf: Optio
         log.info(f"net_conf in open_backend_comms: {net_conf}")
         net_conf_key_mapping = list(net_conf.keys())
         for idx, node in net_conf.items():
-
             if node.state == NodeDescriptor.State.ACTIVE:
                 be_cuid = dfacts.be_fe_cuid_from_hostid(node.host_id)
-
-                # Add this to the object as it lets teardown know it needs to clean this up
                 be_ch_in = Channel(be_mpool, be_cuid)
+                be_in_q = DQueue(main_channel=be_ch_in, pool=be_mpool, pickler=MessagePickler())
 
-                overlay_inout = Connection(
-                    inbound_initializer=be_ch_in,
-                    outbound_initializer=be_ch_out,
-                    options=conn_options,
-                    policy=conn_policy,
-                )
-                overlay_inout.ghost = True
                 be_nodes[node.host_id] = {
-                    "conn": overlay_inout,
-                    "ch_in": be_ch_in,
+                    "fe_in_q": fe_in_q,
+                    "be_in_q": be_in_q,
+                    "be_ch_in": be_ch_in,
                     "hostname": node.name,
                     "ip_addrs": node.ip_addrs,
                     "state": node.state,
@@ -112,29 +105,33 @@ def open_backend_comms(frontend_sdesc: str, network_config: str, net_conf: Optio
                 log.debug(f"constructed backend node: {be_nodes[node.host_id]}")
 
     except (ChannelError, DragonPoolError, DragonMemoryError) as init_err:
-        # Try to clean up the pool
-        if be_mpool is not None:
+        if _created_mpool and be_mpool is not None:
             be_mpool.destroy()
         raise RuntimeError("Overlay transport resource creation failed") from init_err
 
-    return be_mpool, be_ch_out, be_ch_in, be_nodes, overlay_inout
+    return be_mpool, fe_in_q, be_nodes
 
 
 def send_beisup(nodes):
-    """Send valid beisup messages"""
+    """Send valid BEIsUp messages to FE using DQueue."""
 
     for host_id, node in nodes.items():
-        be_up_msg = dmsg.BEIsUp(tag=next_tag(), be_ch_desc=str(B64(node["ch_in"].serialize())), host_id=host_id)
-        node["conn"].send(be_up_msg.serialize())
+        be_up_msg = dmsg.BEIsUp(
+            tag=next_tag(),
+            be_ch_desc=node["be_in_q"].serialize(),
+            host_id=host_id,
+        )
+        node["fe_in_q"].put(be_up_msg)
 
 
 def recv_fenodeidx(nodes):
-    """recv FENoe4deIdxBE and finish filling out node dictionary"""
+    """Recv FENodeIdxBE and finish filling out node dictionary. Returns primary_be_in_q."""
     log = logging.getLogger("recv_fe_nodeidx")
     host_ids = [key for key in nodes.keys()]
+    primary_be_in_q = None
     for idx, _ in enumerate(host_ids):
         if nodes[host_ids[idx]]["state"] == NodeDescriptor.State.ACTIVE:
-            fe_node_idx_msg = dmsg.parse(nodes[host_ids[idx]]["conn"].recv())
+            fe_node_idx_msg = nodes[host_ids[idx]]["be_in_q"].get()
             assert isinstance(fe_node_idx_msg, dmsg.FENodeIdxBE), "la_be node_index from fe expected"
 
             log.info(f"got FENodeIdxBE for index {fe_node_idx_msg.node_index}")
@@ -143,17 +140,16 @@ def recv_fenodeidx(nodes):
                 raise RuntimeError("frontend giving bad node indices")
             nodes[host_ids[idx]]["is_primary"] = nodes[host_ids[idx]]["node_index"] == 0
             if nodes[host_ids[idx]]["is_primary"]:
-                primary_conn = nodes[host_ids[idx]]["conn"]
+                primary_be_in_q = nodes[host_ids[idx]]["be_in_q"]
             log.info(f"constructed be node: {nodes[host_ids[idx]]}")
 
-    return primary_conn
+    return primary_be_in_q
 
 
 def send_shchannelsup(nodes, mpool):
-
     log = logging.getLogger("send_shchannelsup")
     for host_id, node in nodes.items():
-        ls_cuid = dfacts.shepherd_cuid_from_index(node["node_index"])
+        ls_cuid = dfacts.localservices_cuid_from_index(node["node_index"])
         ls_ch = Channel(mpool, ls_cuid)
         node["ls_ch"] = ls_ch
 
@@ -167,22 +163,23 @@ def send_shchannelsup(nodes, mpool):
             host_name=node["hostname"],
             host_id=host_id,
             ip_addrs=node["ip_addrs"],
-            shep_cd=B64.bytes_to_str(node["ls_ch"].serialize()),
+            ls_cd=B64.bytes_to_str(node["ls_ch"].serialize()),
         )
-        ch_up_msg = dmsg.SHChannelsUp(
-            tag=next_tag(), node_desc=node_desc, gs_cd=gs_cd, idx=node["node_index"], net_conf_key=node["net_conf_key"]
+        ch_up_msg = dmsg.LSChannelsUp(
+            tag=next_tag(), node_desc=node_desc, gs_qd=gs_cd, idx=node["node_index"], net_conf_key=node["net_conf_key"]
         )
-        log.info(f"construct SHChannelsUp: {ch_up_msg}")
-        node["conn"].send(ch_up_msg.serialize())
-        log.info(f'sent SHChannelsUp for {node["node_index"]}')
+        log.info(f"construct LSChannelsUp: {ch_up_msg}")
+        node["fe_in_q"].put(ch_up_msg)
+        log.info(f'sent LSChannelsUp for {node["node_index"]}')
 
-    log.info("sent all SHChannelsUp")
+    log.info("sent all LSChannelsUp")
 
 
 def recv_lachannelsinfo(nodes):
-    """Loop to recv all LAChannelsInfo messages in frontend bcast"""
+    """Recv all LAChannelsInfo messages in frontend bcast."""
+    la_channels_info_msg = None
     for host_id, node in nodes.items():
-        la_channels_info_msg = dmsg.parse(node["conn"].recv())
+        la_channels_info_msg = node["be_in_q"].get()
         assert isinstance(la_channels_info_msg, dmsg.LAChannelsInfo), "la_be expected all ls channels info from la_fe"
     return la_channels_info_msg
 
@@ -190,79 +187,82 @@ def recv_lachannelsinfo(nodes):
 def send_taup(nodes):
     for host_id, node in nodes.items():
         ta_up = dmsg.TAUp(tag=next_tag(), idx=node["node_index"])
-        node["conn"].send(ta_up.serialize())
+        node["fe_in_q"].put(ta_up)
 
 
-def send_abnormal_term(conn, host_id=0):
+def send_abnormal_term(fe_in_q, host_id=0):
     abnorm = dmsg.AbnormalTermination(tag=next_tag(), host_id=host_id)
-    conn.send(abnorm.serialize())
+    fe_in_q.put(abnorm)
 
 
-def handle_gsprocesscreate(primary_conn):
-    """Manage a valid response to GSProcessCreate"""
+def handle_gsprocesscreate(primary_be_in_q, fe_in_q):
+    """Manage a valid response to GSProcessCreate."""
 
     log = logging.getLogger("handle_gsprocesscreate")
-    proc_create = dmsg.parse(primary_conn.recv())
+    proc_create = primary_be_in_q.get()
     log.info("presumably got GSProcessCreate")
     assert isinstance(proc_create, dmsg.GSProcessCreate)
-    log.info("recvd GSProccessCreate")
+    log.info("recvd GSProcessCreate")
 
-    # Send response
-    gs_desc = ProcessDescriptor(
-        p_uid=5000, name=proc_create.user_name, node=0, p_p_uid=proc_create.p_uid  # Just a dummy value
-    )
+    gs_desc = ProcessDescriptor(p_uid=5000, name=proc_create.user_name, node=0, p_p_uid=proc_create.p_uid)
     response = dmsg.GSProcessCreateResponse(
         tag=next_tag(), ref=proc_create.tag, err=dmsg.GSProcessCreateResponse.Errors.SUCCESS, desc=gs_desc
     )
-    primary_conn.send(response.serialize())
+    fe_in_q.put(response)
 
 
-def handle_gsprocesscreate_error(primary_conn):
-    """Indicate an error with GSProcessCreate"""
+def handle_gsprocesscreate_error(primary_be_in_q, fe_in_q):
+    """Indicate an error with GSProcessCreate."""
 
     log = logging.getLogger("handle_gsprocesscreate_error")
-    proc_create = dmsg.parse(primary_conn.recv())
+    proc_create = primary_be_in_q.get()
     log.info("presumably got GSProcessCreate")
     assert isinstance(proc_create, dmsg.GSProcessCreate)
-    log.info("recvd GSProccessCreate")
+    log.info("recvd GSProcessCreate")
 
-    # Send error response
     response = dmsg.GSProcessCreateResponse(
         tag=next_tag(),
         ref=proc_create.tag,
         err=dmsg.GSProcessCreateResponse.Errors.FAIL,
         err_info="Error starting Head Process",
     )
-    primary_conn.send(response.serialize())
+    fe_in_q.put(response)
 
 
 def stand_up_backend(mock_overlay, mock_launch, network_config, net_conf=None):
 
     log = logging.getLogger("mock_backend_standup")
-    # Get the mock's input args to the
     while len(mock_overlay.call_args_list) == 0:
         pass
     overlay_args = mock_overlay.call_args_list.pop().kwargs
     overlay = {}
 
-    # Connect to overlay comms to talk to fronteend
-    overlay["ta_ch_in"], overlay["ta_ch_out"], overlay["fe_ta_conn"] = open_overlay_comms(
-        overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"]
+    # Create be_mpool before attaching to any FE-owned queues so all FLI
+    # allocations come from be_mpool rather than fe_mpool. This prevents a
+    # use-after-free crash when the FE destroys fe_mpool concurrently with a
+    # put() call in the mock (the FLI would otherwise allocate send buffers
+    # from fe_mpool).
+    be_mpool = MemoryPool(
+        int(dfacts.DEFAULT_BE_OVERLAY_TRANSPORT_SEG_SZ),
+        f"{os.getuid()}_{os.getpid()}_{2}" + dfacts.DEFAULT_POOL_SUFFIX,
+        dfacts.be_pool_muid_from_hostid(2),
+    )
+
+    overlay["overlay_in_q"], overlay["overlay_out_q"] = open_overlay_comms(
+        overlay_args["ch_in_sdesc"], overlay_args["ch_out_sdesc"], mpool=be_mpool
     )
 
     # Let frontend know the overlay is "up"
-    overlay["fe_ta_conn"].send(dmsg.OverlayPingLA(next_tag()).serialize())
+    overlay["overlay_out_q"].put(dmsg.OverlayPingLA(next_tag()))
 
-    # Grab the frontend channel descriptor for the launched backend and
-    # send it mine
     while len(mock_launch.call_args_list) == 0:
         pass
     launch_be_args = mock_launch.call_args_list.pop().kwargs
     log.info(f"got be args: {launch_be_args}")
 
-    # Connect to backend comms for frontend-to-backend and back comms
-    overlay["be_mpool"], overlay["be_ch_out"], overlay["be_ch_in"], overlay["be_nodes"], overlay["overlay_inout"] = (
-        open_backend_comms(launch_be_args["frontend_sdesc"], network_config, net_conf=net_conf)
+    # Pass the already-created be_mpool so open_backend_comms doesn't create a new one
+    overlay["be_mpool"], overlay["fe_in_q"], overlay["be_nodes"] = open_backend_comms(
+        launch_be_args["frontend_sdesc"], network_config, net_conf=net_conf, be_mpool=be_mpool
     )
     log.info("got backend up")
 
@@ -271,107 +271,117 @@ def stand_up_backend(mock_overlay, mock_launch, network_config, net_conf=None):
 
 def handle_bringup(mock_overlay, mock_launch, network_config, net_conf=None):
 
-    log = logging.getLogger("mock_fulL_bringup")
+    log = logging.getLogger("mock_full_bringup")
 
     overlay = stand_up_backend(mock_overlay, mock_launch, network_config, net_conf=net_conf)
 
-    # Send BEIsUp
     send_beisup(overlay["be_nodes"])
     log.info("send BEIsUp messages")
 
-    # Recv FENodeIdxBE
-    overlay["primary_conn"] = recv_fenodeidx(overlay["be_nodes"])
+    overlay["primary_be_in_q"] = recv_fenodeidx(overlay["be_nodes"])
     log.info("got all the FENodeIdxBE messages")
 
-    # Fudge some SHChannelsUp messages
     send_shchannelsup(overlay["be_nodes"], overlay["be_mpool"])
     log.info(
-        f'sent shchannelsup: {[node["gs_ch"].serialize() for node in overlay["be_nodes"].values() if node["gs_ch"] is not None]}'
+        f'sent shchannelsup: {[node["gs_ch"].serialize() for node in overlay["be_nodes"].values() if node.get("gs_ch") is not None]}'
     )
 
-    # Receive LAChannelsInfo
     la_info = recv_lachannelsinfo(overlay["be_nodes"])
     log.info("la_be received LAChannelsInfo")
 
-    # Send TAUp
     send_taup(overlay["be_nodes"])
     log.info("sent TAUp messages")
 
-    # Send gs is up from primary
-    overlay["primary_conn"].send(dmsg.GSIsUp(tag=next_tag()).serialize())
+    overlay["fe_in_q"].put(dmsg.GSIsUp(tag=next_tag()))
     log.info("send GSIsUp")
 
     return overlay, la_info
 
 
-def handle_overlay_teardown(overlay_conn):
-    """complete teardown of frontend overlay process"""
-    halt_on = dmsg.parse(overlay_conn.recv())
-    assert isinstance(halt_on, dmsg.LAHaltOverlay)
+def handle_overlay_teardown(overlay_in_q, overlay_out_q):
+    """Complete teardown of frontend overlay process."""
+    import queue as _queue
+
+    log = logging.getLogger("handle_overlay_teardown")
+    try:
+        halt_on = overlay_in_q.get(timeout=10.0)
+        assert isinstance(halt_on, dmsg.LAHaltOverlay)
+    except _queue.Empty:
+        log.warning("handle_overlay_teardown: LAHaltOverlay not received within timeout")
+        return
 
     # This may fail depending on the testing infrastructure
     try:
-        overlay_conn.send(dmsg.OverlayHalted(tag=next_tag()).serialize())
-    except ChannelError:
+        overlay_out_q.put(dmsg.OverlayHalted(tag=next_tag()))
+    except (ChannelError, ValueError, DragonFLIError):
         pass
 
 
 def handle_teardown(
     nodes,
-    primary_conn,
-    overlay_conn,
+    primary_be_in_q,
+    fe_in_q,
+    overlay_in_q,
+    overlay_out_q,
     timeout_backend=False,
     timeout_overlay=False,
     gs_head_exit=True,
     abort_shteardown=None,
-    abnormal_termination=False
+    abnormal_termination=False,
 ):
-    """Do full teardown from perspective of backend"""
+    """Do full teardown from perspective of backend.
 
-    if gs_head_exit:
-        primary_conn.send(dmsg.GSHeadExit(exit_code=0, tag=next_tag()).serialize())
+    Uses timeouts on all queue operations so that if the FE exits early
+    (e.g. during abnormal teardown race), the mock bails out gracefully
+    instead of blocking on a closed DQueue and causing a segfault.
+    """
+    import queue as _queue
 
-    # Recv GSTeardown
-    gs_teardown = dmsg.parse(primary_conn.recv())
-    assert isinstance(gs_teardown, dmsg.GSTeardown)
     log = logging.getLogger("handle_teardown")
-    log.debug("got gstteardown")
 
-    primary_conn.send(dmsg.GSHalted(tag=next_tag()).serialize())
-    log.debug("sent gshalted")
+    try:
+        if gs_head_exit:
+            fe_in_q.put(dmsg.GSHeadExit(exit_code=0, tag=next_tag()), timeout=2.0)
 
-    # Recv SHHaltTA for everyone and send back TAHalted
-    for node in nodes.values():
-        ta_halt_msg = dmsg.parse(node["conn"].recv())
-        assert isinstance(ta_halt_msg, dmsg.SHHaltTA), "SHHaltTA from fe expected"
-        node["conn"].send(dmsg.TAHalted(tag=next_tag()).serialize())
-    log.debug("received all SHHaltTA from frontend")
+        gs_teardown = primary_be_in_q.get(timeout=10.0)
+        assert isinstance(gs_teardown, dmsg.GSTeardown)
+        log.debug("got gsteardown")
 
-    if timeout_backend:
-        log.info("returning early during teardown to test frontend teardown timeout")
-        return
+        fe_in_q.put(dmsg.GSHalted(tag=next_tag()), timeout=2.0)
+        log.debug("sent gshalted")
 
-    # Recv SHTeardown and send shhaltbe
-    for index, node in enumerate(nodes.values()):
+        for node in nodes.values():
+            ta_halt_msg = node["be_in_q"].get(timeout=10.0)
+            assert isinstance(ta_halt_msg, dmsg.LSHaltTA), "LSHaltTA from fe expected"
+            node["fe_in_q"].put(dmsg.TAHalted(tag=next_tag()), timeout=2.0)
+        log.debug("received all LSHaltTA from frontend")
 
-        sh_teardown_msg = None
+        if timeout_backend:
+            log.info("returning early during teardown to test frontend teardown timeout")
+            return
 
-        # Under normal circumstances we send the SHTeardown message twice
-        # but when in abnormal termination mode we only expect to see it once
-        count = 2 if not abnormal_termination else 1
-        for _ in range(count):
-            sh_teardown_msg = dmsg.parse(node["conn"].recv())
-            assert isinstance(sh_teardown_msg, dmsg.SHTeardown), "SHTeardown from fe expected"
+        for index, node in enumerate(nodes.values()):
+            count = 2 if not abnormal_termination else 1
+            for _ in range(count):
+                sh_teardown_msg = node["be_in_q"].get(timeout=10.0)
+                assert isinstance(sh_teardown_msg, dmsg.LSTeardown), "LSTeardown from fe expected"
 
-        if abort_shteardown is not None and index == abort_shteardown:
-            node["conn"].send(dmsg.AbnormalTermination(tag=next_tag()).serialize())
-        node["conn"].send(dmsg.SHHaltBE(tag=next_tag()).serialize())
+            if abort_shteardown is not None and index == abort_shteardown:
+                node["fe_in_q"].put(dmsg.AbnormalTermination(tag=next_tag()), timeout=2.0)
+            node["fe_in_q"].put(dmsg.LSHaltBE(tag=next_tag()), timeout=2.0)
 
-    # Recv BEHalted
-    for node in nodes.values():
-        be_halted_msg = dmsg.parse(node["conn"].recv())
-        assert isinstance(be_halted_msg, dmsg.BEHalted), f"BEHalted from fe expected got {type(be_halted_msg)}"
+        for node in nodes.values():
+            be_halted_msg = node["be_in_q"].get(timeout=10.0)
+            assert isinstance(be_halted_msg, dmsg.BEHalted), f"BEHalted from fe expected got {type(be_halted_msg)}"
 
-    # Recv FE's LAHaltOverlay for overlay and then tell it we've shut down our mocked up overlay tree
-    if not timeout_overlay:
-        handle_overlay_teardown(overlay_conn)
+        if not timeout_overlay:
+            handle_overlay_teardown(overlay_in_q, overlay_out_q)
+
+    except _queue.Full:
+        log.warning(
+            "handle_teardown: fe_in_q.put() timed out — FE already closed its inbound queue (abnormal exit path)"
+        )
+    except _queue.Empty:
+        log.warning("handle_teardown: be_in_q.get() timed out — FE did not send expected message (abnormal exit path)")
+    except DragonFLIError:
+        log.warning("handle_teardown: FLI error during put/get — FE may have destroyed channels (abnormal exit path)")

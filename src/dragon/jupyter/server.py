@@ -43,11 +43,11 @@ def main():
             args = ["jupyter", "notebook", "--ip", "0.0.0.0", "--no-browser", "--allow-root"]
 
         with open(filename,"w") as f:
-            f.write(f"import os\n")
-            f.write(f"if os.getenv('DRAGON_GS_RET_CD') is not None:\n")
+            f.write("import os\n")
+            f.write("if os.getenv('DRAGON_GS_RET_QD') is not None:\n")
             f.write(f"    os.environ['{gproc.DRAGON_CAPTURE_MP_CHILD_OUTPUT}'] = 'True'\n")
-            f.write(f"    import dragon.globalservices.api_setup as api\n")
-            f.write(f"    api.connect_to_infrastructure(force=True)\n")
+            f.write("    import dragon.globalservices.api_setup as api\n")
+            f.write("    api.connect_to_infrastructure(force=True)\n")
 
         proc = subprocess.Popen(args)
         proc.wait()

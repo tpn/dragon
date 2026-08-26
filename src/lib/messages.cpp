@@ -108,14 +108,14 @@ DragonResponseMsg::builder(MessageDef::Builder& msg)
 /********************************************************************************************************/
 /* local services create process local channel */
 
-SHCreateProcessLocalChannelMsg::SHCreateProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t muid, uint64_t blockSize, uint64_t capacity, const char* respFLI):
-    DragonMsg(SHCreateProcessLocalChannelMsg::TC, tag), mPUID(puid), mMUID(muid), mBlockSize(blockSize), mCapacity(capacity), mFLI(respFLI) {}
+LSCreateProcessLocalChannelMsg::LSCreateProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t muid, uint64_t blockSize, uint64_t capacity, const char* respFLI):
+    DragonMsg(LSCreateProcessLocalChannelMsg::TC, tag), mPUID(puid), mMUID(muid), mBlockSize(blockSize), mCapacity(capacity), mFLI(respFLI) {}
 
 void
-SHCreateProcessLocalChannelMsg::builder(MessageDef::Builder& msg)
+LSCreateProcessLocalChannelMsg::builder(MessageDef::Builder& msg)
 {
     DragonMsg::builder(msg);
-    SHCreateProcessLocalChannelDef::Builder builder = msg.initShCreateProcessLocalChannel();
+    LSCreateProcessLocalChannelDef::Builder builder = msg.initLsCreateProcessLocalChannel();
     builder.setPuid(mPUID);
     builder.setMuid(mMUID);
     builder.setBlockSize(mBlockSize);
@@ -124,53 +124,53 @@ SHCreateProcessLocalChannelMsg::builder(MessageDef::Builder& msg)
 }
 
 dragonError_t
-SHCreateProcessLocalChannelMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
+LSCreateProcessLocalChannelMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
 {
     try {
 
-        SHCreateProcessLocalChannelDef::Reader shCPLCReader = reader.getShCreateProcessLocalChannel();
+        LSCreateProcessLocalChannelDef::Reader lsCPLCReader = reader.getLsCreateProcessLocalChannel();
 
-        (*msg) = new SHCreateProcessLocalChannelMsg(
+        (*msg) = new LSCreateProcessLocalChannelMsg(
             reader.getTag(),
-            shCPLCReader.getPuid(),
-            shCPLCReader.getMuid(),
-            shCPLCReader.getBlockSize(),
-            shCPLCReader.getCapacity(),
-            shCPLCReader.getRespFLI().cStr());
+            lsCPLCReader.getPuid(),
+            lsCPLCReader.getMuid(),
+            lsCPLCReader.getBlockSize(),
+            lsCPLCReader.getCapacity(),
+            lsCPLCReader.getRespFLI().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHCreateProcessLocalChannel message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSCreateProcessLocalChannel message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
 const char*
-SHCreateProcessLocalChannelMsg::respFLI()
+LSCreateProcessLocalChannelMsg::respFLI()
 {
     return mFLI.c_str();
 }
 
 const uint64_t
-SHCreateProcessLocalChannelMsg::puid()
+LSCreateProcessLocalChannelMsg::puid()
 {
     return mPUID;
 }
 
 const uint64_t
-SHCreateProcessLocalChannelMsg::muid()
+LSCreateProcessLocalChannelMsg::muid()
 {
     return mMUID;
 }
 
 const uint64_t
-SHCreateProcessLocalChannelMsg::blockSize()
+LSCreateProcessLocalChannelMsg::blockSize()
 {
     return mBlockSize;
 }
 
 const uint64_t
-SHCreateProcessLocalChannelMsg::capacity()
+LSCreateProcessLocalChannelMsg::capacity()
 {
     return mCapacity;
 }
@@ -178,40 +178,40 @@ SHCreateProcessLocalChannelMsg::capacity()
 /********************************************************************************************************/
 /* local services create process local channel response */
 
-SHCreateProcessLocalChannelResponseMsg::SHCreateProcessLocalChannelResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* serChannel):
-    DragonResponseMsg(SHCreateProcessLocalChannelResponseMsg::TC, tag, ref, err, errInfo), mSerChannel(serChannel) {}
+LSCreateProcessLocalChannelResponseMsg::LSCreateProcessLocalChannelResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* serChannel):
+    DragonResponseMsg(LSCreateProcessLocalChannelResponseMsg::TC, tag, ref, err, errInfo), mSerChannel(serChannel) {}
 
 void
-SHCreateProcessLocalChannelResponseMsg::builder(MessageDef::Builder& msg)
+LSCreateProcessLocalChannelResponseMsg::builder(MessageDef::Builder& msg)
 {
     DragonResponseMsg::builder(msg);
-    SHCreateProcessLocalChannelResponseDef::Builder builder = msg.initShCreateProcessLocalChannelResponse();
+    LSCreateProcessLocalChannelResponseDef::Builder builder = msg.initLsCreateProcessLocalChannelResponse();
     builder.setSerChannel(mSerChannel);
 }
 
 dragonError_t
-SHCreateProcessLocalChannelResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
+LSCreateProcessLocalChannelResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
 {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
-        SHCreateProcessLocalChannelResponseDef::Reader shCPLCResponseReader = reader.getShCreateProcessLocalChannelResponse();
+        LSCreateProcessLocalChannelResponseDef::Reader lsCPLCResponseReader = reader.getLsCreateProcessLocalChannelResponse();
 
-        (*msg) = new SHCreateProcessLocalChannelResponseMsg(
+        (*msg) = new LSCreateProcessLocalChannelResponseMsg(
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
             rReader.getErrInfo().cStr(),
-            shCPLCResponseReader.getSerChannel().cStr());
+            lsCPLCResponseReader.getSerChannel().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHCreateProcessLocalChannelResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSCreateProcessLocalChannelResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
 const char*
-SHCreateProcessLocalChannelResponseMsg::serChannel()
+LSCreateProcessLocalChannelResponseMsg::serChannel()
 {
     return this->mSerChannel.c_str();
 }
@@ -219,53 +219,53 @@ SHCreateProcessLocalChannelResponseMsg::serChannel()
 /********************************************************************************************************/
 /* local services destroy process local channel */
 
-SHDestroyProcessLocalChannelMsg::SHDestroyProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t cuid, const char* respFLI):
-    DragonMsg(SHDestroyProcessLocalChannelMsg::TC, tag), mPUID(puid), mCUID(cuid), mFLI(respFLI) {}
+LSDestroyProcessLocalChannelMsg::LSDestroyProcessLocalChannelMsg(uint64_t tag, uint64_t puid, uint64_t cuid, const char* respFLI):
+    DragonMsg(LSDestroyProcessLocalChannelMsg::TC, tag), mPUID(puid), mCUID(cuid), mFLI(respFLI) {}
 
 void
-SHDestroyProcessLocalChannelMsg::builder(MessageDef::Builder& msg)
+LSDestroyProcessLocalChannelMsg::builder(MessageDef::Builder& msg)
 {
     DragonMsg::builder(msg);
-    SHDestroyProcessLocalChannelDef::Builder builder = msg.initShDestroyProcessLocalChannel();
+    LSDestroyProcessLocalChannelDef::Builder builder = msg.initLsDestroyProcessLocalChannel();
     builder.setPuid(this->mPUID);
     builder.setCuid(this->mCUID);
     builder.setRespFLI(this->mFLI);
 }
 
 dragonError_t
-SHDestroyProcessLocalChannelMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
+LSDestroyProcessLocalChannelMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
 {
     try {
 
-        SHDestroyProcessLocalChannelDef::Reader shDPLCReader = reader.getShDestroyProcessLocalChannel();
+        LSDestroyProcessLocalChannelDef::Reader lsDPLCReader = reader.getLsDestroyProcessLocalChannel();
 
-        (*msg) = new SHDestroyProcessLocalChannelMsg(
+        (*msg) = new LSDestroyProcessLocalChannelMsg(
             reader.getTag(),
-            shDPLCReader.getPuid(),
-            shDPLCReader.getCuid(),
-            shDPLCReader.getRespFLI().cStr());
+            lsDPLCReader.getPuid(),
+            lsDPLCReader.getCuid(),
+            lsDPLCReader.getRespFLI().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHDestroyProcessLocalChannel message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSDestroyProcessLocalChannel message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
 const char*
-SHDestroyProcessLocalChannelMsg::respFLI()
+LSDestroyProcessLocalChannelMsg::respFLI()
 {
     return mFLI.c_str();
 }
 
 const uint64_t
-SHDestroyProcessLocalChannelMsg::puid()
+LSDestroyProcessLocalChannelMsg::puid()
 {
     return mPUID;
 }
 
 const uint64_t
-SHDestroyProcessLocalChannelMsg::cuid()
+LSDestroyProcessLocalChannelMsg::cuid()
 {
     return mCUID;
 }
@@ -273,24 +273,24 @@ SHDestroyProcessLocalChannelMsg::cuid()
 /********************************************************************************************************/
 /* local services Destroy Process Local Channel Response */
 
-SHDestroyProcessLocalChannelResponseMsg::SHDestroyProcessLocalChannelResponseMsg(
+LSDestroyProcessLocalChannelResponseMsg::LSDestroyProcessLocalChannelResponseMsg(
     uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo):
-    DragonResponseMsg(SHDestroyProcessLocalChannelResponseMsg::TC, tag, ref, err, errInfo)
+    DragonResponseMsg(LSDestroyProcessLocalChannelResponseMsg::TC, tag, ref, err, errInfo)
     {}
 
 dragonError_t
-SHDestroyProcessLocalChannelResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSDestroyProcessLocalChannelResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
 
-        (*msg) = new SHDestroyProcessLocalChannelResponseMsg(
+        (*msg) = new LSDestroyProcessLocalChannelResponseMsg(
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
             rReader.getErrInfo().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHDestroyProcessLocalChannelResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSDestroyProcessLocalChannelResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
@@ -300,10 +300,10 @@ SHDestroyProcessLocalChannelResponseMsg::deserialize(MessageDef::Reader& reader,
 /********************************************************************************************************/
 /* local services Create Process Local Pool */
 
-SHCreateProcessLocalPoolMsg::SHCreateProcessLocalPoolMsg(uint64_t tag, uint64_t puid, uint64_t size, uint64_t minBlockSize,
+LSCreateProcessLocalPoolMsg::LSCreateProcessLocalPoolMsg(uint64_t tag, uint64_t puid, uint64_t size, uint64_t minBlockSize,
                                                       const char* name, const size_t* preAllocs, const size_t numPreAllocs,
                                                       const char* respFLI):
-    DragonMsg(SHCreateProcessLocalPoolMsg::TC, tag), mPUID(puid), mRespFLI(respFLI), mSize(size), mMinBlockSize(minBlockSize),
+    DragonMsg(LSCreateProcessLocalPoolMsg::TC, tag), mPUID(puid), mRespFLI(respFLI), mSize(size), mMinBlockSize(minBlockSize),
     mName(name) {
 
     for (size_t k=0;k<numPreAllocs;k++)
@@ -311,10 +311,10 @@ SHCreateProcessLocalPoolMsg::SHCreateProcessLocalPoolMsg(uint64_t tag, uint64_t 
 }
 
 void
-SHCreateProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
+LSCreateProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
 {
     DragonMsg::builder(msg);
-    SHCreateProcessLocalPoolDef::Builder builder = msg.initShCreateProcessLocalPool();
+    LSCreateProcessLocalPoolDef::Builder builder = msg.initLsCreateProcessLocalPool();
     builder.setPuid(mPUID);
     builder.setSize(mSize);
     builder.setMinBlockSize(mMinBlockSize);
@@ -327,10 +327,10 @@ SHCreateProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
 }
 
 dragonError_t
-SHCreateProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSCreateProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
 
-        SHCreateProcessLocalPoolDef::Reader mReader = reader.getShCreateProcessLocalPool();
+        LSCreateProcessLocalPoolDef::Reader mReader = reader.getLsCreateProcessLocalPool();
 
         size_t* alloc_arr = NULL;
         size_t numPreAllocs = 0;
@@ -347,7 +347,7 @@ SHCreateProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg**
             }
         }
 
-        (*msg) = new SHCreateProcessLocalPoolMsg(
+        (*msg) = new LSCreateProcessLocalPoolMsg(
             reader.getTag(),
             mReader.getPuid(),
             mReader.getSize(),
@@ -361,62 +361,62 @@ SHCreateProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg**
             free(alloc_arr);
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHCreateProcessLocalPool message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSCreateProcessLocalPool message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
-const char* SHCreateProcessLocalPoolMsg::respFLI() {
+const char* LSCreateProcessLocalPoolMsg::respFLI() {
     return mRespFLI.c_str();
 }
 
-const uint64_t SHCreateProcessLocalPoolMsg::puid() {
+const uint64_t LSCreateProcessLocalPoolMsg::puid() {
     return mPUID;
 }
 
-const char* SHCreateProcessLocalPoolMsg::name() {
+const char* LSCreateProcessLocalPoolMsg::name() {
     return mName.c_str();
 }
 
-const uint64_t SHCreateProcessLocalPoolMsg::minBlockSize() {
+const uint64_t LSCreateProcessLocalPoolMsg::minBlockSize() {
     return mMinBlockSize;
 }
 
-const uint64_t SHCreateProcessLocalPoolMsg::size() {
+const uint64_t LSCreateProcessLocalPoolMsg::size() {
     return mSize;
 }
 
-const size_t SHCreateProcessLocalPoolMsg::preAlloc(int idx) {
+const size_t LSCreateProcessLocalPoolMsg::preAlloc(int idx) {
     return mPreAllocs[idx];
 }
 
-const size_t SHCreateProcessLocalPoolMsg::numPreAllocs() {
+const size_t LSCreateProcessLocalPoolMsg::numPreAllocs() {
     return mPreAllocs.size();
 }
 
 /********************************************************************************************************/
 /* local services Create Process Local Pool Response */
 
-SHCreateProcessLocalPoolResponseMsg::SHCreateProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err,
+LSCreateProcessLocalPoolResponseMsg::LSCreateProcessLocalPoolResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err,
                                                                    const char* errInfo, const char* serPool):
-    DragonResponseMsg(SHCreateProcessLocalPoolResponseMsg::TC, tag, ref, err, errInfo), mSerPool(serPool) {}
+    DragonResponseMsg(LSCreateProcessLocalPoolResponseMsg::TC, tag, ref, err, errInfo), mSerPool(serPool) {}
 
 void
-SHCreateProcessLocalPoolResponseMsg::builder(MessageDef::Builder& msg)
+LSCreateProcessLocalPoolResponseMsg::builder(MessageDef::Builder& msg)
 {
     DragonResponseMsg::builder(msg);
-    SHCreateProcessLocalPoolResponseDef::Builder builder = msg.initShCreateProcessLocalPoolResponse();
+    LSCreateProcessLocalPoolResponseDef::Builder builder = msg.initLsCreateProcessLocalPoolResponse();
     builder.setSerPool(mSerPool);
 }
 
 dragonError_t
-SHCreateProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSCreateProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
-        SHCreateProcessLocalPoolResponseDef::Reader mReader = reader.getShCreateProcessLocalPoolResponse();
+        LSCreateProcessLocalPoolResponseDef::Reader mReader = reader.getLsCreateProcessLocalPoolResponse();
 
-        (*msg) = new SHCreateProcessLocalPoolResponseMsg(
+        (*msg) = new LSCreateProcessLocalPoolResponseMsg(
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
@@ -424,13 +424,13 @@ SHCreateProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, Dra
             mReader.getSerPool().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHCreateProcessLocalPoolResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSCreateProcessLocalPoolResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
-const char* SHCreateProcessLocalPoolResponseMsg::serPool() {
+const char* LSCreateProcessLocalPoolResponseMsg::serPool() {
     return mSerPool.c_str();
 
 }
@@ -438,74 +438,74 @@ const char* SHCreateProcessLocalPoolResponseMsg::serPool() {
 /********************************************************************************************************/
 /* local services Register Process Local Pool */
 
-SHRegisterProcessLocalPoolMsg::SHRegisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI):
-    DragonMsg(SHRegisterProcessLocalPoolMsg::TC, tag), mPUID(puid), mSerPool(serPool), mRespFLI(respFLI) {}
+LSRegisterProcessLocalPoolMsg::LSRegisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI):
+    DragonMsg(LSRegisterProcessLocalPoolMsg::TC, tag), mPUID(puid), mSerPool(serPool), mRespFLI(respFLI) {}
 
 void
-SHRegisterProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
+LSRegisterProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
 {
     DragonMsg::builder(msg);
-    SHRegisterProcessLocalPoolDef::Builder builder = msg.initShRegisterProcessLocalPool();
+    LSRegisterProcessLocalPoolDef::Builder builder = msg.initLsRegisterProcessLocalPool();
     builder.setPuid(mPUID);
     builder.setSerPool(mSerPool.c_str());
     builder.setRespFLI(mRespFLI.c_str());
 }
 
 dragonError_t
-SHRegisterProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSRegisterProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
 
-        SHRegisterProcessLocalPoolDef::Reader mReader = reader.getShRegisterProcessLocalPool();
+        LSRegisterProcessLocalPoolDef::Reader mReader = reader.getLsRegisterProcessLocalPool();
 
-        (*msg) = new SHRegisterProcessLocalPoolMsg(
+        (*msg) = new LSRegisterProcessLocalPoolMsg(
             reader.getTag(),
             mReader.getPuid(),
             mReader.getSerPool().cStr(),
             mReader.getRespFLI().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHRegisterProcessLocalPool message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSRegisterProcessLocalPool message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
 uint64_t
-SHRegisterProcessLocalPoolMsg::puid() {
+LSRegisterProcessLocalPoolMsg::puid() {
     return mPUID;
 }
 
 const char*
-SHRegisterProcessLocalPoolMsg::serPool() {
+LSRegisterProcessLocalPoolMsg::serPool() {
     return mSerPool.c_str();
 }
 
 const char*
-SHRegisterProcessLocalPoolMsg::respFLI() {
+LSRegisterProcessLocalPoolMsg::respFLI() {
     return mRespFLI.c_str();
 }
 
 /********************************************************************************************************/
 /* local services Register Process Local Pool Response */
 
-SHRegisterProcessLocalPoolResponseMsg::SHRegisterProcessLocalPoolResponseMsg(
+LSRegisterProcessLocalPoolResponseMsg::LSRegisterProcessLocalPoolResponseMsg(
     uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo):
-    DragonResponseMsg(SHRegisterProcessLocalPoolResponseMsg::TC, tag, ref, err, errInfo)
+    DragonResponseMsg(LSRegisterProcessLocalPoolResponseMsg::TC, tag, ref, err, errInfo)
     {}
 
 dragonError_t
-SHRegisterProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSRegisterProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
 
-        (*msg) = new SHRegisterProcessLocalPoolResponseMsg(
+        (*msg) = new LSRegisterProcessLocalPoolResponseMsg(
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
             rReader.getErrInfo().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHRegisterProcessLocalPoolResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSRegisterProcessLocalPoolResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
@@ -514,74 +514,74 @@ SHRegisterProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, D
 /********************************************************************************************************/
 /* local services Deregister Process Local Pool */
 
-SHDeregisterProcessLocalPoolMsg::SHDeregisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI):
-    DragonMsg(SHDeregisterProcessLocalPoolMsg::TC, tag), mPUID(puid), mSerPool(serPool), mRespFLI(respFLI) {}
+LSDeregisterProcessLocalPoolMsg::LSDeregisterProcessLocalPoolMsg(uint64_t tag, uint64_t puid, const char* serPool, const char* respFLI):
+    DragonMsg(LSDeregisterProcessLocalPoolMsg::TC, tag), mPUID(puid), mSerPool(serPool), mRespFLI(respFLI) {}
 
 void
-SHDeregisterProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
+LSDeregisterProcessLocalPoolMsg::builder(MessageDef::Builder& msg)
 {
     DragonMsg::builder(msg);
-    SHDeregisterProcessLocalPoolDef::Builder builder = msg.initShDeregisterProcessLocalPool();
+    LSDeregisterProcessLocalPoolDef::Builder builder = msg.initLsDeregisterProcessLocalPool();
     builder.setPuid(mPUID);
     builder.setSerPool(mSerPool.c_str());
     builder.setRespFLI(mRespFLI.c_str());
 }
 
 dragonError_t
-SHDeregisterProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSDeregisterProcessLocalPoolMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
 
-        SHDeregisterProcessLocalPoolDef::Reader mReader = reader.getShDeregisterProcessLocalPool();
+        LSDeregisterProcessLocalPoolDef::Reader mReader = reader.getLsDeregisterProcessLocalPool();
 
-        (*msg) = new SHDeregisterProcessLocalPoolMsg(
+        (*msg) = new LSDeregisterProcessLocalPoolMsg(
             reader.getTag(),
             mReader.getPuid(),
             mReader.getSerPool().cStr(),
             mReader.getRespFLI().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHDeregisterProcessLocalPool message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSDeregisterProcessLocalPool message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
 uint64_t
-SHDeregisterProcessLocalPoolMsg::puid() {
+LSDeregisterProcessLocalPoolMsg::puid() {
     return mPUID;
 }
 
 const char*
-SHDeregisterProcessLocalPoolMsg::serPool() {
+LSDeregisterProcessLocalPoolMsg::serPool() {
     return mSerPool.c_str();
 }
 
 const char*
-SHDeregisterProcessLocalPoolMsg::respFLI() {
+LSDeregisterProcessLocalPoolMsg::respFLI() {
     return mRespFLI.c_str();
 }
 
 /********************************************************************************************************/
 /* local services Deregister Process Local Pool Response */
 
-SHDeregisterProcessLocalPoolResponseMsg::SHDeregisterProcessLocalPoolResponseMsg(
+LSDeregisterProcessLocalPoolResponseMsg::LSDeregisterProcessLocalPoolResponseMsg(
     uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo):
-    DragonResponseMsg(SHDeregisterProcessLocalPoolResponseMsg::TC, tag, ref, err, errInfo)
+    DragonResponseMsg(LSDeregisterProcessLocalPoolResponseMsg::TC, tag, ref, err, errInfo)
     {}
 
 dragonError_t
-SHDeregisterProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+LSDeregisterProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
 
-        (*msg) = new SHDeregisterProcessLocalPoolResponseMsg(
+        (*msg) = new LSDeregisterProcessLocalPoolResponseMsg(
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
             rReader.getErrInfo().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHDeregisterProcessLocalPoolResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSDeregisterProcessLocalPoolResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
@@ -590,67 +590,67 @@ SHDeregisterProcessLocalPoolResponseMsg::deserialize(MessageDef::Reader& reader,
 /********************************************************************************************************/
 /* local services Set Key/Value Pair */
 
-SHSetKVMsg::SHSetKVMsg(uint64_t tag, const char* key, const char* value, const char* respFLI):
-    DragonMsg(SHSetKVMsg::TC, tag), mKey(key), mValue(value), mFLI(respFLI) {}
+LSSetKVMsg::LSSetKVMsg(uint64_t tag, const char* key, const char* value, const char* respFLI):
+    DragonMsg(LSSetKVMsg::TC, tag), mKey(key), mValue(value), mFLI(respFLI) {}
 
-void SHSetKVMsg::builder(MessageDef::Builder& msg) {
+void LSSetKVMsg::builder(MessageDef::Builder& msg) {
     DragonMsg::builder(msg);
-    SHSetKVDef::Builder builder = msg.initShSetKV();
+    LSSetKVDef::Builder builder = msg.initLsSetKV();
     builder.setKey(this->mKey);
     builder.setValue(this->mValue);
     builder.setRespFLI(this->mFLI);
 }
 
-dragonError_t SHSetKVMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+dragonError_t LSSetKVMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
-        SHSetKVDef::Reader shSetKVReader = reader.getShSetKV();
+        LSSetKVDef::Reader lsSetKVReader = reader.getLsSetKV();
 
-        (*msg) = new SHSetKVMsg(
+        (*msg) = new LSSetKVMsg(
             reader.getTag(),
-            shSetKVReader.getKey().cStr(),
-            shSetKVReader.getValue().cStr(),
-            shSetKVReader.getRespFLI().cStr());
+            lsSetKVReader.getKey().cStr(),
+            lsSetKVReader.getValue().cStr(),
+            lsSetKVReader.getRespFLI().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHSetKV message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSSetKV message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
-const char* SHSetKVMsg::key() {
+const char* LSSetKVMsg::key() {
     return mKey.c_str();
 }
 
-const char* SHSetKVMsg::value() {
+const char* LSSetKVMsg::value() {
     return mValue.c_str();
 }
 
-const char* SHSetKVMsg::respFLI() {
+const char* LSSetKVMsg::respFLI() {
     return mFLI.c_str();
 }
 
 /********************************************************************************************************/
 /* local services Set Key/Value Pair Response */
 
-SHSetKVResponseMsg::SHSetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo):
-    DragonResponseMsg(SHSetKVResponseMsg::TC, tag, ref, err, errInfo) {}
+LSSetKVResponseMsg::LSSetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo):
+    DragonResponseMsg(LSSetKVResponseMsg::TC, tag, ref, err, errInfo) {}
 
 
 dragonError_t
-SHSetKVResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
+LSSetKVResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
 {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
 
-        (*msg) = new SHSetKVResponseMsg (
+        (*msg) = new LSSetKVResponseMsg (
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
             rReader.getErrInfo().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHSetKVResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSSetKVResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
@@ -659,75 +659,75 @@ SHSetKVResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
 /********************************************************************************************************/
 /* local services Get Key/Value Pair */
 
-SHGetKVMsg::SHGetKVMsg(uint64_t tag, const char* key, const char* respFLI):
-    DragonMsg(SHGetKVMsg::TC, tag), mKey(key), mFLI(respFLI) {}
+LSGetKVMsg::LSGetKVMsg(uint64_t tag, const char* key, const char* respFLI):
+    DragonMsg(LSGetKVMsg::TC, tag), mKey(key), mFLI(respFLI) {}
 
-void SHGetKVMsg::builder(MessageDef::Builder& msg) {
+void LSGetKVMsg::builder(MessageDef::Builder& msg) {
     DragonMsg::builder(msg);
-    SHGetKVDef::Builder builder = msg.initShGetKV();
+    LSGetKVDef::Builder builder = msg.initLsGetKV();
     builder.setKey(this->mKey);
     builder.setRespFLI(this->mFLI);
 }
 
-dragonError_t SHGetKVMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
+dragonError_t LSGetKVMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg) {
     try {
-        SHGetKVDef::Reader shGetKVReader = reader.getShGetKV();
+        LSGetKVDef::Reader lsGetKVReader = reader.getLsGetKV();
 
-        (*msg) = new SHGetKVMsg(
+        (*msg) = new LSGetKVMsg(
             reader.getTag(),
-            shGetKVReader.getKey().cStr(),
-            shGetKVReader.getRespFLI().cStr());
+            lsGetKVReader.getKey().cStr(),
+            lsGetKVReader.getRespFLI().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHGetKV message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSGetKV message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
-const char* SHGetKVMsg::key() {
+const char* LSGetKVMsg::key() {
     return mKey.c_str();
 }
 
-const char* SHGetKVMsg::respFLI() {
+const char* LSGetKVMsg::respFLI() {
     return mFLI.c_str();
 }
 
 /********************************************************************************************************/
 /* local services Get Key/Value Pair Response */
 
-SHGetKVResponseMsg::SHGetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* value):
-    DragonResponseMsg(SHGetKVResponseMsg::TC, tag, ref, err, errInfo), mValue(value) {}
+LSGetKVResponseMsg::LSGetKVResponseMsg(uint64_t tag, uint64_t ref, dragonError_t err, const char* errInfo, const char* value):
+    DragonResponseMsg(LSGetKVResponseMsg::TC, tag, ref, err, errInfo), mValue(value) {}
 
 void
-SHGetKVResponseMsg::builder(MessageDef::Builder& msg)
+LSGetKVResponseMsg::builder(MessageDef::Builder& msg)
 {
     DragonResponseMsg::builder(msg);
-    SHGetKVResponseDef::Builder builder = msg.initShGetKVResponse();
+    LSGetKVResponseDef::Builder builder = msg.initLsGetKVResponse();
     builder.setValue(mValue);
 }
 
 dragonError_t
-SHGetKVResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
+LSGetKVResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg** msg)
 {
     try {
         ResponseDef::Reader rReader = reader.getResponseOption().getValue();
-        SHGetKVResponseDef::Reader shGetKVReponseReader = reader.getShGetKVResponse();
-        (*msg) = new SHGetKVResponseMsg (
+        LSGetKVResponseDef::Reader lsGetKVReponseReader = reader.getLsGetKVResponse();
+        (*msg) = new LSGetKVResponseMsg (
             reader.getTag(),
             rReader.getRef(),
             (dragonError_t)rReader.getErr(),
             rReader.getErrInfo().cStr(),
-            shGetKVReponseReader.getValue().cStr());
+            lsGetKVReponseReader.getValue().cStr());
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHGetKVResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSGetKVResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);
 }
 
-const char* SHGetKVResponseMsg::value() {
+const char* LSGetKVResponseMsg::value() {
     return mValue.c_str();
 }
 
@@ -815,7 +815,7 @@ DDRegisterClientResponseMsg::deserialize(MessageDef::Reader& reader, DragonMsg**
         *msg = resp_msg;
 
     } catch (...) {
-        err_return(DRAGON_FAILURE, "There was an exception while deserializing the SHCreateProcessLocalChannelResponse message.");
+        err_return(DRAGON_FAILURE, "There was an exception while deserializing the LSCreateProcessLocalChannelResponse message.");
     }
 
     no_err_return(DRAGON_SUCCESS);

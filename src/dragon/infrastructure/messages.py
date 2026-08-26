@@ -204,47 +204,47 @@ class MessageTypes(enum.Enum):
     GS_CHANNEL_GET_RECVH_RESPONSE = enum.auto()  #:
     ABNORMAL_TERMINATION = enum.auto()  #:
     GS_STARTED = enum.auto()  #:
-    GS_PING_SH = enum.auto()  #:
+    GS_PING_LS = enum.auto()  #:
     GS_IS_UP = enum.auto()  #:
     GS_HEAD_EXIT = enum.auto()  #:
     GS_CHANNEL_RELEASE = enum.auto()  #:
     GS_HALTED = enum.auto()  #:
-    SH_PROCESS_CREATE = enum.auto()  #:
-    SH_PROCESS_CREATE_RESPONSE = enum.auto()  #:
-    SH_MULTI_PROCESS_CREATE = enum.auto()  #:
-    SH_MULTI_PROCESS_CREATE_RESPONSE = enum.auto()  #:
-    SH_MULTI_PROCESS_KILL = enum.auto()  #:
-    SH_PROCESS_KILL = enum.auto()  #:
-    SH_PROCESS_EXIT = enum.auto()  #:
-    SH_CHANNEL_CREATE = enum.auto()  #:
-    SH_CHANNEL_CREATE_RESPONSE = enum.auto()  #:
-    SH_CHANNEL_DESTROY = enum.auto()  #:
-    SH_CHANNEL_DESTROY_RESPONSE = enum.auto()  #:
-    SH_LOCK_CHANNEL = enum.auto()  #:
-    SH_LOCK_CHANNEL_RESPONSE = enum.auto()  #:
-    SH_ALLOC_MSG = enum.auto()  #:
-    SH_ALLOC_MSG_RESPONSE = enum.auto()  #:
-    SH_ALLOC_BLOCK = enum.auto()  #:
-    SH_ALLOC_BLOCK_RESPONSE = enum.auto()  #:
-    SH_CHANNELS_UP = enum.auto()  #:
-    SH_PING_GS = enum.auto()  #:
-    SH_HALTED = enum.auto()  #:
-    SH_FWD_INPUT = enum.auto()  #:
-    SH_FWD_INPUT_ERR = enum.auto()  #:
-    SH_FWD_OUTPUT = enum.auto()  #:
+    LS_PROCESS_CREATE = enum.auto()  #:
+    LS_PROCESS_CREATE_RESPONSE = enum.auto()  #:
+    LS_MULTI_PROCESS_CREATE = enum.auto()  #:
+    LS_MULTI_PROCESS_CREATE_RESPONSE = enum.auto()  #:
+    LS_MULTI_PROCESS_KILL = enum.auto()  #:
+    LS_PROCESS_KILL = enum.auto()  #:
+    LS_PROCESS_EXIT = enum.auto()  #:
+    LS_CHANNEL_CREATE = enum.auto()  #:
+    LS_CHANNEL_CREATE_RESPONSE = enum.auto()  #:
+    LS_CHANNEL_DESTROY = enum.auto()  #:
+    LS_CHANNEL_DESTROY_RESPONSE = enum.auto()  #:
+    LS_LOCK_CHANNEL = enum.auto()  #:
+    LS_LOCK_CHANNEL_RESPONSE = enum.auto()  #:
+    LS_ALLOC_MSG = enum.auto()  #:
+    LS_ALLOC_MSG_RESPONSE = enum.auto()  #:
+    LS_ALLOC_BLOCK = enum.auto()  #:
+    LS_ALLOC_BLOCK_RESPONSE = enum.auto()  #:
+    LS_CHANNELS_UP = enum.auto()  #:
+    LS_PING_GS = enum.auto()  #:
+    LS_HALTED = enum.auto()  #:
+    LS_FWD_INPUT = enum.auto()  #:
+    LS_FWD_INPUT_ERR = enum.auto()  #:
+    LS_FWD_OUTPUT = enum.auto()  #:
     GS_TEARDOWN = enum.auto()  #:
-    SH_TEARDOWN = enum.auto()  #:
-    SH_PING_BE = enum.auto()  #:
-    BE_PING_SH = enum.auto()  #:
-    TA_PING_SH = enum.auto()  #:
-    SH_HALT_TA = enum.auto()  #:
+    LS_TEARDOWN = enum.auto()  #:
+    LS_PING_BE = enum.auto()  #:
+    BE_PING_LS = enum.auto()  #:
+    TA_PING_LS = enum.auto()  #:
+    LS_HALT_TA = enum.auto()  #:
     TA_HALTED = enum.auto()  #:
-    SH_HALT_BE = enum.auto()  #:
+    LS_HALT_BE = enum.auto()  #:
     BE_HALTED = enum.auto()  #:
     TA_UP = enum.auto()  #:
     GS_PING_PROC = enum.auto()  #:
     GS_DUMP_STATE = enum.auto()  #:
-    SH_DUMP_STATE = enum.auto()  #:
+    LS_DUMP_STATE = enum.auto()  #:
     LA_BROADCAST = enum.auto()  #:
     LA_PASS_THRU_FB = enum.auto()  #:
     LA_PASS_THRU_BF = enum.auto()  #:
@@ -256,32 +256,32 @@ class MessageTypes(enum.Enum):
     GS_POOL_LIST_RESPONSE = enum.auto()  #:
     GS_POOL_QUERY = enum.auto()  #:
     GS_POOL_QUERY_RESPONSE = enum.auto()  #:
-    SH_POOL_CREATE = enum.auto()  #:
-    SH_POOL_CREATE_RESPONSE = enum.auto()  #:
-    SH_POOL_DESTROY = enum.auto()  #:
-    SH_POOL_DESTROY_RESPONSE = enum.auto()  #:
-    SH_CREATE_PROCESS_LOCAL_CHANNEL = enum.auto()  #:
-    SH_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE = enum.auto()  #:
-    SH_DESTROY_PROCESS_LOCAL_CHANNEL = enum.auto()  #:
-    SH_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE = enum.auto()  #:
-    SH_CREATE_PROCESS_LOCAL_POOL = enum.auto()  #:
-    SH_CREATE_PROCESS_LOCAL_POOL_RESPONSE = enum.auto()  #:
-    SH_REGISTER_PROCESS_LOCAL_POOL = enum.auto()  #:
-    SH_REGISTER_PROCESS_LOCAL_POOL_RESPONSE = enum.auto()  #:
-    SH_DEREGISTER_PROCESS_LOCAL_POOL = enum.auto()  #:
-    SH_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE = enum.auto()  #:
-    SH_PUSH_KVL = enum.auto()  #:
-    SH_PUSH_KVL_RESPONSE = enum.auto()  #:
-    SH_POP_KVL = enum.auto()  #:
-    SH_POP_KVL_RESPONSE = enum.auto()  #:
-    SH_GET_KVL = enum.auto()  #:
-    SH_GET_KVL_RESPONSE = enum.auto()  #:
-    SH_SET_KV = enum.auto()  #:
-    SH_SET_KV_RESPONSE = enum.auto()  #:
-    SH_GET_KV = enum.auto()  #:
-    SH_GET_KV_RESPONSE = enum.auto()  #:
-    SH_EXEC_MEM_REQUEST = enum.auto()  #:
-    SH_EXEC_MEM_RESPONSE = enum.auto()  #:
+    LS_POOL_CREATE = enum.auto()  #:
+    LS_POOL_CREATE_RESPONSE = enum.auto()  #:
+    LS_POOL_DESTROY = enum.auto()  #:
+    LS_POOL_DESTROY_RESPONSE = enum.auto()  #:
+    LS_CREATE_PROCESS_LOCAL_CHANNEL = enum.auto()  #:
+    LS_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE = enum.auto()  #:
+    LS_DESTROY_PROCESS_LOCAL_CHANNEL = enum.auto()  #:
+    LS_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE = enum.auto()  #:
+    LS_CREATE_PROCESS_LOCAL_POOL = enum.auto()  #:
+    LS_CREATE_PROCESS_LOCAL_POOL_RESPONSE = enum.auto()  #:
+    LS_REGISTER_PROCESS_LOCAL_POOL = enum.auto()  #:
+    LS_REGISTER_PROCESS_LOCAL_POOL_RESPONSE = enum.auto()  #:
+    LS_DEREGISTER_PROCESS_LOCAL_POOL = enum.auto()  #:
+    LS_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE = enum.auto()  #:
+    LS_PUSH_KVL = enum.auto()  #:
+    LS_PUSH_KVL_RESPONSE = enum.auto()  #:
+    LS_POP_KVL = enum.auto()  #:
+    LS_POP_KVL_RESPONSE = enum.auto()  #:
+    LS_GET_KVL = enum.auto()  #:
+    LS_GET_KVL_RESPONSE = enum.auto()  #:
+    LS_SET_KV = enum.auto()  #:
+    LS_SET_KV_RESPONSE = enum.auto()  #:
+    LS_GET_KV = enum.auto()  #:
+    LS_GET_KV_RESPONSE = enum.auto()  #:
+    LS_EXEC_MEM_REQUEST = enum.auto()  #:
+    LS_EXEC_MEM_RESPONSE = enum.auto()  #:
     LS_DESTROY_PMIX = enum.auto()  #:
     LS_DESTROY_PMIX_RESPONSE = enum.auto()  #:
     GS_UNEXPECTED = enum.auto()  #:
@@ -290,10 +290,10 @@ class MessageTypes(enum.Enum):
     LA_PROCESS_DICT = enum.auto()  #:
     LA_PROCESS_DICT_RESPONSE = enum.auto()  #:
     LA_DUMP_STATE = enum.auto()  #:
-    BE_NODE_IDX_SH = enum.auto()  #:
+    BE_NODE_IDX_LS = enum.auto()  #:
     LA_CHANNELS_INFO = enum.auto()  #:
-    SH_MULTI_PROCESS_KILL_RESPONSE = enum.auto()  #:
-    SH_PROCESS_KILL_RESPONSE = enum.auto()  #:
+    LS_MULTI_PROCESS_KILL_RESPONSE = enum.auto()  #:
+    LS_PROCESS_KILL_RESPONSE = enum.auto()  #:
     BREAKPOINT = enum.auto()  #:
     GS_PROCESS_JOIN_LIST = enum.auto()  #:
     GS_PROCESS_JOIN_LIST_RESPONSE = enum.auto()  #:
@@ -443,6 +443,7 @@ class MessageTypes(enum.Enum):
     PG_CLOSE = enum.auto()  #:
     PMIX_FENCE_MSG = enum.auto()  #:
     CP_LOGGING_MESSAGE = enum.auto()  #:
+    TA_UPDATE_NODES_RESPONSE = enum.auto()  #:
 
 
 @enum.unique
@@ -745,8 +746,8 @@ class CapNProtoResponseMsg(CapNProtoMsg):
         return self._errInfo
 
 
-class SHCreateProcessLocalChannel(CapNProtoMsg):
-    _tc = MessageTypes.SH_CREATE_PROCESS_LOCAL_CHANNEL
+class LSCreateProcessLocalChannel(CapNProtoMsg):
+    _tc = MessageTypes.LS_CREATE_PROCESS_LOCAL_CHANNEL
 
     def __init__(self, tag, puid, muid, blockSize, capacity, respFLI):
         super().__init__(tag)
@@ -796,8 +797,8 @@ class SHCreateProcessLocalChannel(CapNProtoMsg):
         return self._capacity
 
 
-class SHCreateProcessLocalChannelResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE
+class LSCreateProcessLocalChannelResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_CREATE_PROCESS_LOCAL_CHANNEL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo="", serChannel=""):
         super().__init__(tag, ref, err, errInfo)
@@ -819,8 +820,8 @@ class SHCreateProcessLocalChannelResponse(CapNProtoResponseMsg):
         return self._serChannel
 
 
-class SHDestroyProcessLocalChannel(CapNProtoMsg):
-    _tc = MessageTypes.SH_DESTROY_PROCESS_LOCAL_CHANNEL
+class LSDestroyProcessLocalChannel(CapNProtoMsg):
+    _tc = MessageTypes.LS_DESTROY_PROCESS_LOCAL_CHANNEL
 
     def __init__(self, tag, puid, cuid, respFLI):
         super().__init__(tag)
@@ -856,15 +857,15 @@ class SHDestroyProcessLocalChannel(CapNProtoMsg):
         return self._cuid
 
 
-class SHDestroyProcessLocalChannelResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE
+class LSDestroyProcessLocalChannelResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_DESTROY_PROCESS_LOCAL_CHANNEL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo=""):
         super().__init__(tag, ref, err, errInfo)
 
 
-class SHCreateProcessLocalPool(CapNProtoMsg):
-    _tc = MessageTypes.SH_CREATE_PROCESS_LOCAL_POOL
+class LSCreateProcessLocalPool(CapNProtoMsg):
+    _tc = MessageTypes.LS_CREATE_PROCESS_LOCAL_POOL
 
     def __init__(self, tag, puid, size, minBlockSize, preAllocs, name, respFLI):
         super().__init__(tag)
@@ -924,8 +925,8 @@ class SHCreateProcessLocalPool(CapNProtoMsg):
         return self._name
 
 
-class SHCreateProcessLocalPoolResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_CREATE_PROCESS_LOCAL_POOL_RESPONSE
+class LSCreateProcessLocalPoolResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_CREATE_PROCESS_LOCAL_POOL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo="", serPool=""):
         super().__init__(tag, ref, err, errInfo)
@@ -947,8 +948,8 @@ class SHCreateProcessLocalPoolResponse(CapNProtoResponseMsg):
         return self._serPool
 
 
-class SHRegisterProcessLocalPool(CapNProtoMsg):
-    _tc = MessageTypes.SH_REGISTER_PROCESS_LOCAL_POOL
+class LSRegisterProcessLocalPool(CapNProtoMsg):
+    _tc = MessageTypes.LS_REGISTER_PROCESS_LOCAL_POOL
 
     def __init__(self, tag, puid, serPool, respFLI):
         super().__init__(tag)
@@ -984,15 +985,15 @@ class SHRegisterProcessLocalPool(CapNProtoMsg):
         return self._respFLI
 
 
-class SHRegisterProcessLocalPoolResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_REGISTER_PROCESS_LOCAL_POOL_RESPONSE
+class LSRegisterProcessLocalPoolResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_REGISTER_PROCESS_LOCAL_POOL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo=""):
         super().__init__(tag, ref, err, errInfo)
 
 
-class SHDeregisterProcessLocalPool(CapNProtoMsg):
-    _tc = MessageTypes.SH_DEREGISTER_PROCESS_LOCAL_POOL
+class LSDeregisterProcessLocalPool(CapNProtoMsg):
+    _tc = MessageTypes.LS_DEREGISTER_PROCESS_LOCAL_POOL
 
     def __init__(self, tag, puid, serPool, respFLI):
         super().__init__(tag)
@@ -1028,15 +1029,15 @@ class SHDeregisterProcessLocalPool(CapNProtoMsg):
         return self._respFLI
 
 
-class SHDeregisterProcessLocalPoolResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE
+class LSDeregisterProcessLocalPoolResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_DEREGISTER_PROCESS_LOCAL_POOL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo=""):
         super().__init__(tag, ref, err, errInfo)
 
 
-class SHPushKVL(CapNProtoMsg):
-    _tc = MessageTypes.SH_PUSH_KVL
+class LSPushKVL(CapNProtoMsg):
+    _tc = MessageTypes.LS_PUSH_KVL
 
     def __init__(self, tag, key, value, respFLI):
         super().__init__(tag)
@@ -1072,15 +1073,15 @@ class SHPushKVL(CapNProtoMsg):
         return self._respFLI
 
 
-class SHPushKVLResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_PUSH_KVL_RESPONSE
+class LSPushKVLResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_PUSH_KVL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo=""):
         super().__init__(tag, ref, err, errInfo)
 
 
-class SHPopKVL(CapNProtoMsg):
-    _tc = MessageTypes.SH_POP_KVL
+class LSPopKVL(CapNProtoMsg):
+    _tc = MessageTypes.LS_POP_KVL
 
     def __init__(self, tag, key, value, respFLI):
         super().__init__(tag)
@@ -1116,15 +1117,15 @@ class SHPopKVL(CapNProtoMsg):
         return self._respFLI
 
 
-class SHPopKVLResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_POP_KVL_RESPONSE
+class LSPopKVLResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_POP_KVL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo=""):
         super().__init__(tag, ref, err, errInfo)
 
 
-class SHGetKVL(CapNProtoMsg):
-    _tc = MessageTypes.SH_GET_KVL
+class LSGetKVL(CapNProtoMsg):
+    _tc = MessageTypes.LS_GET_KVL
 
     def __init__(self, tag, key, respFLI):
         super().__init__(tag)
@@ -1153,8 +1154,8 @@ class SHGetKVL(CapNProtoMsg):
         return self._respFLI
 
 
-class SHGetKVLResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_GET_KVL_RESPONSE
+class LSGetKVLResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_GET_KVL_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo="", values=[]):
         super().__init__(tag, ref, err, errInfo)
@@ -1178,8 +1179,8 @@ class SHGetKVLResponse(CapNProtoResponseMsg):
         return self._values
 
 
-class SHSetKV(CapNProtoMsg):
-    _tc = MessageTypes.SH_SET_KV
+class LSSetKV(CapNProtoMsg):
+    _tc = MessageTypes.LS_SET_KV
 
     def __init__(self, tag, key, value, respFLI):
         super().__init__(tag)
@@ -1215,15 +1216,15 @@ class SHSetKV(CapNProtoMsg):
         return self._respFLI
 
 
-class SHSetKVResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_SET_KV_RESPONSE
+class LSSetKVResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_SET_KV_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo=""):
         super().__init__(tag, ref, err, errInfo)
 
 
-class SHGetKV(CapNProtoMsg):
-    _tc = MessageTypes.SH_GET_KV
+class LSGetKV(CapNProtoMsg):
+    _tc = MessageTypes.LS_GET_KV
 
     def __init__(self, tag, key, respFLI):
         super().__init__(tag)
@@ -1252,8 +1253,8 @@ class SHGetKV(CapNProtoMsg):
         return self._respFLI
 
 
-class SHGetKVResponse(CapNProtoResponseMsg):
-    _tc = MessageTypes.SH_GET_KV_RESPONSE
+class LSGetKVResponse(CapNProtoResponseMsg):
+    _tc = MessageTypes.LS_GET_KV_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo="", value=None):
         super().__init__(tag, ref, err, errInfo)
@@ -1677,7 +1678,6 @@ class DDRegisterManagerResponse(CapNProtoResponseMsg):
 
 
 class DDCreateManagerResponse(CapNProtoResponseMsg):
-
     _tc = MessageTypes.DD_CREATE_MANAGER_RESPONSE
 
     def __init__(self, tag, ref, err, errInfo, managerID):
@@ -1823,6 +1823,7 @@ class DDPut(CapNProtoMsg):
     @property
     def waitFor(self):
         return self._waitFor
+
 
 class DDPutResponse(CapNProtoResponseMsg):
     _tc = MessageTypes.DD_PUT_RESPONSE
@@ -2181,7 +2182,6 @@ class DDManagerStatsResponse(CapNProtoResponseMsg):
 
 
 class DDSync(CapNProtoMsg):
-
     _tc = MessageTypes.DD_SYNC
 
     def __init__(self, tag, respFLI, timeout=None, broadcast=True):
@@ -6090,14 +6090,14 @@ class GSStarted(InfraMsg):
         return rv
 
 
-class GSPingSH(InfraMsg):
+class GSPingLS(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.GS_PING_SH
+    _tc = MessageTypes.GS_PING_LS
 
     def __init__(self, tag, _tc=None):
         super().__init__(tag)
@@ -6255,7 +6255,7 @@ class GSHalted(InfraMsg):
         return rv
 
 
-class SHProcessCreate(InfraMsg):
+class LSProcessCreate(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of
     the message structure.
@@ -6263,7 +6263,7 @@ class SHProcessCreate(InfraMsg):
     The initial_stdin is a string which if non-empty is written along with a terminating newline character
     to the stdin of the newly created process.
 
-    The stdin, stdout, and stderr are all either None or an instance of SHChannelCreate to be processed
+    The stdin, stdout, and stderr are all either None or an instance of LSChannelCreate to be processed
     by the local services component. In addition, stdout and stderr may carry a string file path; when a
     string file path is provided, process output is written directly to that file in binary append mode on
     the target node. The path is not validated by local services at message receipt time — it must exist on
@@ -6271,7 +6271,7 @@ class SHProcessCreate(InfraMsg):
 
     """
 
-    _tc = MessageTypes.SH_PROCESS_CREATE
+    _tc = MessageTypes.LS_PROCESS_CREATE
 
     def __init__(
         self,
@@ -6324,20 +6324,20 @@ class SHProcessCreate(InfraMsg):
         self.user = user
         self.umask = umask
         self.pipesize = pipesize
-        if stdin_msg is None or isinstance(stdin_msg, SHChannelCreate):
+        if stdin_msg is None or isinstance(stdin_msg, LSChannelCreate):
             self.stdin_msg = stdin_msg
         else:
-            self.stdin_msg = SHChannelCreate.from_sdict(stdin_msg)
+            self.stdin_msg = LSChannelCreate.from_sdict(stdin_msg)
 
-        if stdout_msg is None or isinstance(stdout_msg, SHChannelCreate):
+        if stdout_msg is None or isinstance(stdout_msg, LSChannelCreate):
             self.stdout_msg = stdout_msg
         else:
-            self.stdout_msg = SHChannelCreate.from_sdict(stdout_msg)
+            self.stdout_msg = LSChannelCreate.from_sdict(stdout_msg)
 
-        if stderr_msg is None or isinstance(stderr_msg, SHChannelCreate):
+        if stderr_msg is None or isinstance(stderr_msg, LSChannelCreate):
             self.stderr_msg = stderr_msg
         else:
-            self.stderr_msg = SHChannelCreate.from_sdict(stderr_msg)
+            self.stderr_msg = LSChannelCreate.from_sdict(stderr_msg)
 
         if pmi_info is None:
             self.pmi_info = None
@@ -6357,10 +6357,10 @@ class SHProcessCreate(InfraMsg):
         else:
             raise ValueError(f"LS unsupported layout value {layout=}")
 
-        if gs_ret_chan_msg is None or isinstance(gs_ret_chan_msg, SHChannelCreate):
+        if gs_ret_chan_msg is None or isinstance(gs_ret_chan_msg, LSChannelCreate):
             self.gs_ret_chan_msg = gs_ret_chan_msg
         else:
-            self.gs_ret_chan_msg = SHChannelCreate.from_sdict(gs_ret_chan_msg)
+            self.gs_ret_chan_msg = LSChannelCreate.from_sdict(gs_ret_chan_msg)
 
     @property
     def options(self):
@@ -6401,14 +6401,14 @@ class SHProcessCreate(InfraMsg):
         return rv
 
 
-class SHProcessCreateResponse(InfraMsg):
+class LSProcessCreateResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a
     description of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_PROCESS_CREATE_RESPONSE
+    _tc = MessageTypes.LS_PROCESS_CREATE_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6430,25 +6430,25 @@ class SHProcessCreateResponse(InfraMsg):
         super().__init__(tag, ref, err)
         self.err_info = err_info
 
-        if stdin_resp is None or isinstance(stdin_resp, SHChannelCreateResponse):
+        if stdin_resp is None or isinstance(stdin_resp, LSChannelCreateResponse):
             self.stdin_resp = stdin_resp
         else:
-            self.stdin_resp = SHChannelCreateResponse.from_sdict(stdin_resp)
+            self.stdin_resp = LSChannelCreateResponse.from_sdict(stdin_resp)
 
-        if stdout_resp is None or isinstance(stdout_resp, SHChannelCreateResponse):
+        if stdout_resp is None or isinstance(stdout_resp, LSChannelCreateResponse):
             self.stdout_resp = stdout_resp
         else:
-            self.stdout_resp = SHChannelCreateResponse.from_sdict(stdout_resp)
+            self.stdout_resp = LSChannelCreateResponse.from_sdict(stdout_resp)
 
-        if stderr_resp is None or isinstance(stderr_resp, SHChannelCreateResponse):
+        if stderr_resp is None or isinstance(stderr_resp, LSChannelCreateResponse):
             self.stderr_resp = stderr_resp
         else:
-            self.stderr_resp = SHChannelCreateResponse.from_sdict(stderr_resp)
+            self.stderr_resp = LSChannelCreateResponse.from_sdict(stderr_resp)
 
-        if gs_ret_chan_resp is None or isinstance(gs_ret_chan_resp, SHChannelCreateResponse):
+        if gs_ret_chan_resp is None or isinstance(gs_ret_chan_resp, LSChannelCreateResponse):
             self.gs_ret_chan_resp = gs_ret_chan_resp
         else:
-            self.gs_ret_chan_resp = SHChannelCreateResponse.from_sdict(gs_ret_chan_resp)
+            self.gs_ret_chan_resp = LSChannelCreateResponse.from_sdict(gs_ret_chan_resp)
 
     def get_sdict(self):
         rv = super().get_sdict()
@@ -6461,14 +6461,14 @@ class SHProcessCreateResponse(InfraMsg):
         return rv
 
 
-class SHProcessKill(InfraMsg):
+class LSProcessKill(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of
     the message structure.
 
     """
 
-    _tc = MessageTypes.SH_PROCESS_KILL
+    _tc = MessageTypes.LS_PROCESS_KILL
 
     def __init__(self, tag, p_uid, r_c_uid, t_p_uid, sig, hide_stderr=False, _tc=None):
         super().__init__(tag)
@@ -6488,8 +6488,8 @@ class SHProcessKill(InfraMsg):
         return rv
 
 
-class SHProcessKillResponse(InfraMsg):
-    _tc = MessageTypes.SH_PROCESS_KILL_RESPONSE
+class LSProcessKillResponse(InfraMsg):
+    _tc = MessageTypes.LS_PROCESS_KILL_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6508,19 +6508,19 @@ class SHProcessKillResponse(InfraMsg):
         return rv
 
 
-class SHMultiProcessKill(InfraMsg):
-    _td = MessageTypes.SH_MULTI_PROCESS_KILL
+class LSMultiProcessKill(InfraMsg):
+    _td = MessageTypes.LS_MULTI_PROCESS_KILL
 
-    def __init__(self, tag, r_c_uid, procs: List[Union[Dict, SHProcessKill]], _tc=None):
+    def __init__(self, tag, r_c_uid, procs: List[Union[Dict, LSProcessKill]], _tc=None):
         super().__init__(tag)
         self.r_c_uid = int(r_c_uid)
 
         self.procs = []
         for proc in procs:
-            if isinstance(proc, SHProcessKill):
+            if isinstance(proc, LSProcessKill):
                 self.procs.append(proc)
             elif isinstance(proc, dict):
-                self.procs.append(SHProcessKill.from_sdict(proc))
+                self.procs.append(LSProcessKill.from_sdict(proc))
             else:
                 raise ValueError(f"proc is not a supported type %s", type(proc))
 
@@ -6531,8 +6531,8 @@ class SHMultiProcessKill(InfraMsg):
         return rv
 
 
-class SHMultiProcessKillResponse(InfraMsg):
-    _tc = MessageTypes.SH_MULTI_PROCESS_KILL_RESPONSE
+class LSMultiProcessKillResponse(InfraMsg):
+    _tc = MessageTypes.LS_MULTI_PROCESS_KILL_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6546,7 +6546,7 @@ class SHMultiProcessKillResponse(InfraMsg):
         err,
         err_info="",
         exit_code=0,
-        responses: List[Union[Dict, SHProcessKillResponse]] = None,
+        responses: List[Union[Dict, LSProcessKillResponse]] = None,
         failed: bool = False,
         _tc=None,
     ):
@@ -6557,10 +6557,10 @@ class SHMultiProcessKillResponse(InfraMsg):
         self.failed = failed
         self.responses = []
         for response in responses:
-            if isinstance(response, SHProcessKillResponse):
+            if isinstance(response, LSProcessKillResponse):
                 self.responses.append(response)
             elif isinstance(response, dict):
-                self.responses.append(SHProcessKillResponse.from_sdict(response))
+                self.responses.append(LSProcessKillResponse.from_sdict(response))
             else:
                 raise ValueError(f"response is not a supported type %s", type(response))
 
@@ -6579,14 +6579,14 @@ class SHMultiProcessKillResponse(InfraMsg):
         return rv
 
 
-class SHProcessExit(InfraMsg):
+class LSProcessExit(InfraMsg):
     """
     Refer to to
     :ref:`Common Fields<cfs>` for a description of
     the message structure.
     """
 
-    _tc = MessageTypes.SH_PROCESS_EXIT
+    _tc = MessageTypes.LS_PROCESS_EXIT
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6607,14 +6607,14 @@ class SHProcessExit(InfraMsg):
         return rv
 
 
-class SHMultiProcessCreate(InfraMsg):
-    _tc = MessageTypes.SH_MULTI_PROCESS_CREATE
+class LSMultiProcessCreate(InfraMsg):
+    _tc = MessageTypes.LS_MULTI_PROCESS_CREATE
 
     def __init__(
         self,
         tag,
         r_c_uid,
-        procs: List[Union[Dict, SHProcessCreate]],
+        procs: List[Union[Dict, LSProcessCreate]],
         pmi_group_info: Optional[PMIGroupInfo] = None,
         pmix_ddict_desc: str = None,
         guid: int = None,
@@ -6635,10 +6635,10 @@ class SHMultiProcessCreate(InfraMsg):
 
         self.procs = []
         for proc in procs:
-            if isinstance(proc, SHProcessCreate):
+            if isinstance(proc, LSProcessCreate):
                 self.procs.append(proc)
             elif isinstance(proc, dict):
-                self.procs.append(SHProcessCreate.from_sdict(proc))
+                self.procs.append(LSProcessCreate.from_sdict(proc))
             else:
                 raise ValueError("proc is not a supported type %s", type(proc))
 
@@ -6654,8 +6654,8 @@ class SHMultiProcessCreate(InfraMsg):
         return rv
 
 
-class SHMultiProcessCreateResponse(InfraMsg):
-    _tc = MessageTypes.SH_MULTI_PROCESS_CREATE_RESPONSE
+class LSMultiProcessCreateResponse(InfraMsg):
+    _tc = MessageTypes.LS_MULTI_PROCESS_CREATE_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6669,7 +6669,7 @@ class SHMultiProcessCreateResponse(InfraMsg):
         err,
         err_info="",
         exit_code=0,
-        responses: List[Union[Dict, SHProcessCreateResponse]] = None,
+        responses: List[Union[Dict, LSProcessCreateResponse]] = None,
         failed: bool = False,
         _tc=None,
     ):
@@ -6680,10 +6680,10 @@ class SHMultiProcessCreateResponse(InfraMsg):
         self.failed = failed
         self.responses = []
         for response in responses:
-            if isinstance(response, SHProcessCreateResponse):
+            if isinstance(response, LSProcessCreateResponse):
                 self.responses.append(response)
             elif isinstance(response, dict):
-                self.responses.append(SHProcessCreateResponse.from_sdict(response))
+                self.responses.append(LSProcessCreateResponse.from_sdict(response))
             else:
                 raise ValueError(f"response is not a supported type %s", type(response))
 
@@ -6702,13 +6702,13 @@ class SHMultiProcessCreateResponse(InfraMsg):
         return rv
 
 
-class SHPoolCreate(InfraMsg):
+class LSPoolCreate(InfraMsg):
     """
     Refer to
     :ref:`Common Fields<cfs>` for a description of the message structure.
     """
 
-    _tc = MessageTypes.SH_POOL_CREATE
+    _tc = MessageTypes.LS_POOL_CREATE
 
     def __init__(self, tag, p_uid, r_c_uid, size, m_uid, name, attr="", _tc=None):
         super().__init__(tag)
@@ -6732,12 +6732,12 @@ class SHPoolCreate(InfraMsg):
         return rv
 
 
-class SHPoolCreateResponse(InfraMsg):
+class LSPoolCreateResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the message structure.
     """
 
-    _tc = MessageTypes.SH_POOL_CREATE_RESPONSE
+    _tc = MessageTypes.LS_POOL_CREATE_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6767,14 +6767,14 @@ class SHPoolCreateResponse(InfraMsg):
         return rv
 
 
-class SHPoolDestroy(InfraMsg):
+class LSPoolDestroy(InfraMsg):
     """
     Refer to to
     the :ref:`Common Fields<cfs>` for a description of
     the message structure.
     """
 
-    _tc = MessageTypes.SH_POOL_DESTROY
+    _tc = MessageTypes.LS_POOL_DESTROY
 
     def __init__(self, tag, p_uid, r_c_uid, m_uid, _tc=None):
         super().__init__(tag)
@@ -6791,13 +6791,13 @@ class SHPoolDestroy(InfraMsg):
         return rv
 
 
-class SHPoolDestroyResponse(InfraMsg):
+class LSPoolDestroyResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a
     description of the message structure.
     """
 
-    _tc = MessageTypes.SH_POOL_DESTROY_RESPONSE
+    _tc = MessageTypes.LS_POOL_DESTROY_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6817,14 +6817,14 @@ class SHPoolDestroyResponse(InfraMsg):
         return rv
 
 
-class SHExecMemRequest(InfraMsg):
+class LSExecMemRequest(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description
     of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_EXEC_MEM_REQUEST
+    _tc = MessageTypes.LS_EXEC_MEM_REQUEST
 
     @enum.unique
     class KINDS(enum.Enum):
@@ -6848,14 +6848,14 @@ class SHExecMemRequest(InfraMsg):
         return rv
 
 
-class SHExecMemResponse(InfraMsg):
+class LSExecMemResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description
     of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_EXEC_MEM_RESPONSE
+    _tc = MessageTypes.LS_EXEC_MEM_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6880,13 +6880,13 @@ class SHExecMemResponse(InfraMsg):
         return rv
 
 
-class SHChannelCreate(InfraMsg):
+class LSChannelCreate(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>`
     for a description of the message structure.
     """
 
-    _tc = MessageTypes.SH_CHANNEL_CREATE
+    _tc = MessageTypes.LS_CHANNEL_CREATE
 
     def __init__(self, tag, p_uid, r_c_uid, m_uid, c_uid, options=None, _tc=None):
         super().__init__(tag)
@@ -6922,13 +6922,13 @@ class SHChannelCreate(InfraMsg):
             self._options = dso.ChannelOptions.from_sdict(value)
 
 
-class SHChannelCreateResponse(InfraMsg):
+class LSChannelCreateResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a
     description of the message structure.
     """
 
-    _tc = MessageTypes.SH_CHANNEL_CREATE_RESPONSE
+    _tc = MessageTypes.LS_CHANNEL_CREATE_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -6952,14 +6952,14 @@ class SHChannelCreateResponse(InfraMsg):
         return rv
 
 
-class SHChannelDestroy(InfraMsg):
+class LSChannelDestroy(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description
     of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_CHANNEL_DESTROY
+    _tc = MessageTypes.LS_CHANNEL_DESTROY
 
     def __init__(self, tag, p_uid, r_c_uid, c_uid, _tc=None):
         super().__init__(tag)
@@ -6976,14 +6976,14 @@ class SHChannelDestroy(InfraMsg):
         return rv
 
 
-class SHChannelDestroyResponse(InfraMsg):
+class LSChannelDestroyResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a
     description of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_CHANNEL_DESTROY_RESPONSE
+    _tc = MessageTypes.LS_CHANNEL_DESTROY_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -7002,14 +7002,14 @@ class SHChannelDestroyResponse(InfraMsg):
         return rv
 
 
-class SHLockChannel(InfraMsg):
+class LSLockChannel(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of
     the message structure.
 
     """
 
-    _tc = MessageTypes.SH_LOCK_CHANNEL
+    _tc = MessageTypes.LS_LOCK_CHANNEL
 
     def __init__(self, tag, p_uid, r_c_uid, _tc=None):
         super().__init__(tag)
@@ -7023,14 +7023,14 @@ class SHLockChannel(InfraMsg):
         return rv
 
 
-class SHLockChannelResponse(InfraMsg):
+class LSLockChannelResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a
     description of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_LOCK_CHANNEL_RESPONSE
+    _tc = MessageTypes.LS_LOCK_CHANNEL_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -7046,14 +7046,14 @@ class SHLockChannelResponse(InfraMsg):
         return rv
 
 
-class SHAllocMsg(InfraMsg):
+class LSAllocMsg(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_ALLOC_MSG
+    _tc = MessageTypes.LS_ALLOC_MSG
 
     def __init__(self, tag, p_uid, r_c_uid, _tc=None):
         super().__init__(tag)
@@ -7067,14 +7067,14 @@ class SHAllocMsg(InfraMsg):
         return rv
 
 
-class SHAllocMsgResponse(InfraMsg):
+class LSAllocMsgResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description
     of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_ALLOC_MSG_RESPONSE
+    _tc = MessageTypes.LS_ALLOC_MSG_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -7088,14 +7088,14 @@ class SHAllocMsgResponse(InfraMsg):
         return rv
 
 
-class SHAllocBlock(InfraMsg):
+class LSAllocBlock(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of
     the message structure.
 
     """
 
-    _tc = MessageTypes.SH_ALLOC_BLOCK
+    _tc = MessageTypes.LS_ALLOC_BLOCK
 
     def __init__(self, tag, p_uid, r_c_uid, _tc=None):
         super().__init__(tag)
@@ -7109,14 +7109,14 @@ class SHAllocBlock(InfraMsg):
         return rv
 
 
-class SHAllocBlockResponse(InfraMsg):
+class LSAllocBlockResponse(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a
     description of the message structure.
 
     """
 
-    _tc = MessageTypes.SH_ALLOC_BLOCK_RESPONSE
+    _tc = MessageTypes.LS_ALLOC_BLOCK_RESPONSE
 
     @enum.unique
     class Errors(enum.Enum):
@@ -7143,16 +7143,16 @@ class SHAllocBlockResponse(InfraMsg):
         return rv
 
 
-class SHChannelsUp(InfraMsg):
+class LSChannelsUp(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of
     the message structure.
 
     """
 
-    _tc = MessageTypes.SH_CHANNELS_UP
+    _tc = MessageTypes.LS_CHANNELS_UP
 
-    def __init__(self, tag, node_desc, gs_cd, idx=0, net_conf_key=0, _tc=None):
+    def __init__(self, tag, node_desc, gs_qd, idx=0, net_conf_key=0, _tc=None):
         super().__init__(tag)
 
         self.idx = idx
@@ -7162,27 +7162,27 @@ class SHChannelsUp(InfraMsg):
         elif isinstance(node_desc, NodeDescriptor):
             self.node_desc = node_desc
 
-        # On the primary node the gs_cd is set to the base64 encoded gs channel descriptor.
+        # On the primary node the gs_qd is set to the base64 encoded gs channel descriptor.
         # Otherwise, it is ignored and presumably the empty string.
-        self.gs_cd = gs_cd
+        self.gs_qd = gs_qd
 
     def get_sdict(self):
         rv = super().get_sdict()
         rv["node_desc"] = self.node_desc.get_sdict()
-        rv["gs_cd"] = self.gs_cd
+        rv["gs_qd"] = self.gs_qd
         rv["idx"] = self.idx
         rv["net_conf_key"] = self.net_conf_key
         return rv
 
 
-class SHPingGS(InfraMsg):
+class LSPingGS(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_PING_GS
+    _tc = MessageTypes.LS_PING_GS
 
     def __init__(self, tag, idx=0, node_sdesc=None, _tc=None):
         super().__init__(tag)
@@ -7197,14 +7197,14 @@ class SHPingGS(InfraMsg):
         return rv
 
 
-class SHTeardown(InfraMsg):
+class LSTeardown(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_TEARDOWN
+    _tc = MessageTypes.LS_TEARDOWN
 
     def __init__(self, tag, _tc=None):
         super().__init__(tag)
@@ -7214,42 +7214,42 @@ class SHTeardown(InfraMsg):
         return rv
 
 
-class SHPingBE(InfraMsg):
+class LSPingBE(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_PING_BE
+    _tc = MessageTypes.LS_PING_BE
     EMPTY = b64encode(b"")
 
-    def __init__(self, tag, shep_cd=EMPTY, be_cd=EMPTY, gs_cd=EMPTY, default_pd=EMPTY, inf_pd=EMPTY, _tc=None):
+    def __init__(self, tag, ls_cd=EMPTY, be_cd=EMPTY, gs_qd=EMPTY, default_pd=EMPTY, inf_pd=EMPTY, _tc=None):
         super().__init__(tag)
-        self.shep_cd = shep_cd
+        self.ls_cd = ls_cd
         self.be_cd = be_cd
-        self.gs_cd = gs_cd
+        self.gs_qd = gs_qd
         self.default_pd = default_pd
         self.inf_pd = inf_pd
 
     def get_sdict(self):
         rv = super().get_sdict()
-        rv["shep_cd"] = self.shep_cd
+        rv["ls_cd"] = self.ls_cd
         rv["be_cd"] = self.be_cd
-        rv["gs_cd"] = self.gs_cd
+        rv["gs_qd"] = self.gs_qd
         rv["default_pd"] = self.default_pd
         rv["inf_pd"] = self.inf_pd
         return rv
 
 
-class SHHaltTA(InfraMsg):
+class LSHaltTA(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_HALT_TA
+    _tc = MessageTypes.LS_HALT_TA
 
     def __init__(self, tag, _tc=None):
         super().__init__(tag)
@@ -7259,14 +7259,14 @@ class SHHaltTA(InfraMsg):
         return rv
 
 
-class SHHaltBE(InfraMsg):
+class LSHaltBE(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_HALT_BE
+    _tc = MessageTypes.LS_HALT_BE
 
     def __init__(self, tag, _tc=None):
         super().__init__(tag)
@@ -7276,14 +7276,14 @@ class SHHaltBE(InfraMsg):
         return rv
 
 
-class SHHalted(InfraMsg):
+class LSHalted(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_HALTED
+    _tc = MessageTypes.LS_HALTED
 
     def __init__(self, tag, idx=0, _tc=None):
         super().__init__(tag)
@@ -7295,14 +7295,14 @@ class SHHalted(InfraMsg):
         return rv
 
 
-class SHFwdInput(InfraMsg):
+class LSFwdInput(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_FWD_INPUT
+    _tc = MessageTypes.LS_FWD_INPUT
 
     MAX = 1024
 
@@ -7327,14 +7327,14 @@ class SHFwdInput(InfraMsg):
         return rv
 
 
-class SHFwdInputErr(InfraMsg):
+class LSFwdInputErr(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of
     the message structure.
 
     """
 
-    _tc = MessageTypes.SH_FWD_INPUT_ERR
+    _tc = MessageTypes.LS_FWD_INPUT_ERR
 
     @enum.unique
     class Errors(enum.Enum):
@@ -7355,14 +7355,14 @@ class SHFwdInputErr(InfraMsg):
         return rv
 
 
-class SHFwdOutput(InfraMsg):
+class LSFwdOutput(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_FWD_OUTPUT
+    _tc = MessageTypes.LS_FWD_OUTPUT
 
     MAX = 1024
 
@@ -7399,14 +7399,14 @@ class SHFwdOutput(InfraMsg):
         return f"{super().__str__()}, self.data={self.data!r}, self.p_uid={self.p_uid!r}, self.pid={self.pid!r}, self.fd_num={self.fd_num!r}"
 
 
-class SHDumpState(InfraMsg):
+class LSDumpState(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.SH_DUMP_STATE
+    _tc = MessageTypes.LS_DUMP_STATE
 
     def __init__(self, tag, filename=None, _tc=None):
         super().__init__(tag)
@@ -7418,14 +7418,14 @@ class SHDumpState(InfraMsg):
         return rv
 
 
-class BENodeIdxSH(InfraMsg):
+class BENodeIdxLS(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.BE_NODE_IDX_SH
+    _tc = MessageTypes.BE_NODE_IDX_LS
 
     def __init__(
         self, tag, node_idx, host_name=None, ip_addrs=None, primary=None, logger_sdesc=None, net_conf_key=None, _tc=None
@@ -7463,14 +7463,14 @@ class BENodeIdxSH(InfraMsg):
         return rv
 
 
-class BEPingSH(InfraMsg):
+class BEPingLS(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.BE_PING_SH
+    _tc = MessageTypes.BE_PING_LS
 
     def __init__(self, tag, _tc=None):
         super().__init__(tag)
@@ -7714,7 +7714,7 @@ class LAChannelsInfo(InfraMsg):
         self,
         tag,
         nodes_desc,
-        gs_cd,
+        gs_qd,
         num_gw_channels,
         port=None,
         transport=str(dfacts.TransportAgentOptions.HSTA),
@@ -7724,7 +7724,7 @@ class LAChannelsInfo(InfraMsg):
     ):
         super().__init__(tag)
 
-        self.gs_cd = gs_cd
+        self.gs_qd = gs_qd
         self.transport = dfacts.TransportAgentOptions.from_str(transport)
         self.num_gw_channels = num_gw_channels
         try:
@@ -7748,7 +7748,7 @@ class LAChannelsInfo(InfraMsg):
         rv["nodes_desc"] = self.nodes_desc.copy()
         for key in self.nodes_desc.keys():
             rv["nodes_desc"][key] = self.nodes_desc[key].get_sdict()
-        rv["gs_cd"] = self.gs_cd
+        rv["gs_qd"] = self.gs_qd
         rv["num_gw_channels"] = self.num_gw_channels
         rv["transport"] = str(self.transport)
         return rv
@@ -7825,14 +7825,14 @@ class LogFlushed(InfraMsg):
         return rv
 
 
-class TAPingSH(InfraMsg):
+class TAPingLS(InfraMsg):
     """
     Refer to :ref:`Common Fields<cfs>` for a description of the
     message structure.
 
     """
 
-    _tc = MessageTypes.TA_PING_SH
+    _tc = MessageTypes.TA_PING_LS
 
     def __init__(self, tag, _tc=None):
         super().__init__(tag)
@@ -8148,10 +8148,10 @@ class RuntimeDesc(InfraMsg):
         _tc=None,
     ):
         super().__init__(tag)
-        self.gs_cd = gs_cd
-        self.gs_ret_cd = gs_ret_cd
+        self.gs_qd = gs_qd
+        self.gs_ret_qd = gs_ret_qd
         self.ls_cd = ls_cd
-        self.ls_ret_cd = ls_ret_cd
+        self.ls_ret_qd = ls_ret_qd
         # should we add "username" to the sdesc?
         self.fe_ext_ip_addr = fe_ext_ip_addr
         self.head_node_ip_addr = head_node_ip_addr
@@ -8162,10 +8162,10 @@ class RuntimeDesc(InfraMsg):
 
     def get_sdict(self):
         rv = super().get_sdict()
-        rv["gs_cd"] = self.gs_cd
-        rv["gs_ret_cd"] = self.gs_ret_cd
+        rv["gs_qd"] = self.gs_qd
+        rv["gs_ret_qd"] = self.gs_ret_qd
         rv["ls_cd"] = self.ls_cd
-        rv["ls_ret_cd"] = self.ls_ret_cd
+        rv["ls_ret_qd"] = self.ls_ret_qd
         rv["fe_ext_ip_addr"] = self.fe_ext_ip_addr
         rv["head_node_ip_addr"] = self.head_node_ip_addr
         rv["oob_port"] = self.oob_port
@@ -8221,6 +8221,23 @@ class TAUpdateNodes(InfraMsg):
         rv = super().get_sdict()
         rv["nodes"] = [node.get_sdict() for node in self.nodes]
 
+        return rv
+
+
+class TAUpdateNodesResponse(InfraMsg):
+    """
+    Refer to :ref:`Common Fields<cfs>` for a description of the
+    message structure.
+
+    """
+
+    _tc = MessageTypes.TA_UPDATE_NODES_RESPONSE
+
+    def __init__(self, tag, _tc=None):
+        super().__init__(tag)
+
+    def get_sdict(self):
+        rv = super().get_sdict()
         return rv
 
 
@@ -8536,7 +8553,6 @@ class LSDestroyPMIxResponse(InfraMsg):
 
 PREDETERMINED_CAPS = {
     "GS": "GS",
-    "SH": "SH",
     "LS": "LS",  # For future references to Local Services' abbreviation rathern than SH
     "TA": "TA",
     "BE": "BE",
@@ -8596,13 +8612,13 @@ mt_dispatch = {cls._tc.value: cls for cls in all_message_classes}
 
 import sys
 
-def parse(serialized, restrict=None):
 
+def parse(serialized, restrict=None):
     if serialized is None:
         raise EOFError("The message to parse was None.")
 
     if hasattr(serialized, "__len__") and len(serialized) == 0:
-            raise EOFError("The message to parse was empty.")
+        raise EOFError("The message to parse was empty.")
 
     try:
         # if a compressed message, decompress to get the service message
@@ -8660,11 +8676,13 @@ def MessageQueueClassBuilder():
             try:
                 if channel is not None:
                     channel.destroy()
+                    self._main_channel = None
             except:
                 pass
             try:
                 if pool is not None:
                     pool.destroy()
+                    self._pool = None
             except:
                 pass
 

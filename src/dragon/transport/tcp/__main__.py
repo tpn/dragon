@@ -6,15 +6,15 @@ import ssl
 from collections import defaultdict
 from typing import Union
 
-from ...channels import Channel, register_gateways_from_env, GatewayMessage
+from ...channels import register_gateways_from_env, GatewayMessage
 from ...infrastructure import messages as dmsg
-from ...infrastructure.connection import Connection, ConnectionOptions
 from ...infrastructure.facts import GW_ENV_PREFIX, DEFAULT_TRANSPORT_PORT, FRONTEND_HOSTID
 from ...infrastructure.facts import DEFAULT_OVERLAY_NETWORK_PORT, DRAGON_OVERLAY_DEFAULT_NUM_GW_CHANNELS_PER_NODE
 from ...launcher.util import next_tag
 from ...utils import B64
 from ...utils import host_id as get_host_id, set_host_id
 from ...dtypes import DEFAULT_WAIT_MODE, IDLE_WAIT
+from ...infrastructure.queue import InfraQueue
 
 from .agent import Agent
 from .task import cancel_all_tasks
@@ -39,38 +39,29 @@ out_of_band_accept = False
 
 
 def single_recv(ch_sdesc: bytes) -> Union[tuple(dmsg.all_message_classes)]:
-    ch = Channel.attach(ch_sdesc)
+    dq = InfraQueue.attach(ch_sdesc)
     try:
-        with Connection(inbound_initializer=ch) as conn:
-            return dmsg.parse(conn.recv())
+        return dq.get()
     finally:
-        ch.detach()
+        dq.close()
 
 
-def open_connection(ch_in_sdesc: bytes = None, ch_out_sdesc: bytes = None) -> Connection:
+def open_connection(
+    ch_in_sdesc: bytes = None, ch_out_sdesc: bytes = None, is_ls=False
+) -> tuple[InfraQueue | None, InfraQueue | None]:
     if ch_in_sdesc is None and ch_out_sdesc is None:
         raise ValueError("Requires at least one serialized channel descriptor")
     ch_in = ch_out = conn = None
     if ch_in_sdesc is not None:
-        ch_in = Channel.attach(ch_in_sdesc)
+        q_conn_in = InfraQueue.attach(ch_in_sdesc)
     if ch_out_sdesc is not None:
-        ch_out = Channel.attach(ch_out_sdesc)
-    conn = Connection(
-        inbound_initializer=ch_in,
-        outbound_initializer=ch_out,
-        options=ConnectionOptions(creation_policy=ConnectionOptions.CreationPolicy.EXTERNALLY_MANAGED),
-    )
-    conn.ghost = True
-    conn.open()
-    return conn
+        q_conn_out = InfraQueue.attach(ch_out_sdesc)
+    return q_conn_in, q_conn_out
 
 
-def close_connection(conn: Connection) -> None:
-    conn.close()
-    if conn.inbound_chan is not None:
-        conn.inbound_chan.detach()
-    if conn.outbound_chan is not None:
-        conn.outbound_chan.detach()
+def close_connections(conn_in: InfraQueue, conn_out: InfraQueue) -> None:
+    conn_in.close()
+    conn_out.close()
 
 
 async def tcp_transport_agent(
@@ -89,7 +80,7 @@ async def tcp_transport_agent(
     oob_ip_addr: str = None,
     oob_port: str = None,
     frontend: bool = False,
-) -> None:
+) -> tuple[InfraQueue, InfraQueue]:
 
     # TODO: get rid of globals from proxy-api work (when possible)
     global user_initiated
@@ -109,8 +100,8 @@ async def tcp_transport_agent(
             halt_msg = dmsg.BEHaltOverlay
     elif user_initiated:
         LOGGER = logging.getLogger(DragonLoggingServices.TA).getChild("transport.tcp.__main__")
-        up_msg = dmsg.TAPingSH(next_tag())
-        halt_msg = dmsg.SHHaltTA
+        up_msg = dmsg.TAPingLS(next_tag())
+        halt_msg = dmsg.LSHaltTA
     else:
         LOGGER = logging.getLogger(DragonLoggingServices.OOB).getChild("transport.tcp.__main__")
         halt_msg = dmsg.UserHaltOOB
@@ -132,7 +123,7 @@ async def tcp_transport_agent(
 
     # Initial receive from input channel to get LAChannelsInfo message
     if user_initiated:
-        la_channels_info = await asyncio.to_thread(single_recv, ch_in_sdesc.decode())
+        la_channels_info = await asyncio.to_thread(single_recv, ch_in_sdesc)
         assert isinstance(la_channels_info, dmsg.LAChannelsInfo), "Did not receive LAChannelsInfo from local services"
 
         LOGGER.debug(f"Node {node_index}: LAChannelsInfo: {la_channels_info.get_sdict()}")
@@ -188,8 +179,12 @@ async def tcp_transport_agent(
     try:
         # Establish connection for command-and-control
         if user_initiated:
-            ch_out_sdesc = B64.from_str(node_desc.shep_cd)
-        control = await asyncio.to_thread(open_connection, ch_in_sdesc.decode(), ch_out_sdesc.decode())
+            ch_out_sdesc = node_desc.ls_cd
+            control_q_in, control_q_out = await asyncio.to_thread(
+                open_connection, ch_in_sdesc, ch_out_sdesc, is_ls=True
+            )
+        else:
+            control_q_in, control_q_out = await asyncio.to_thread(open_connection, ch_in_sdesc, ch_out_sdesc)
     except Exception:
         if user_initiated:
             LOGGER.critical(
@@ -264,10 +259,10 @@ async def tcp_transport_agent(
                 agent.new_client(channel_sdesc)
                 LOGGER.debug(f"Created client for gateway channel {i}")
 
-            # Send TAPingSH to local services to acknowledge transport is active
+            # Send TAPingLS to local services to acknowledge transport is active
             # XXX What is tag?
             if user_initiated or infrastructure:
-                await asyncio.to_thread(control.send, up_msg.serialize())
+                await asyncio.to_thread(control_q_out.put, up_msg)
                 LOGGER.info(f"Sent {type(up_msg)} reply")
 
             while agent.is_running():
@@ -277,17 +272,18 @@ async def tcp_transport_agent(
                 # await asyncio.sleep(5.0)
 
                 # Wait for control message
-                ready = await asyncio.to_thread(control.poll, timeout=5.0)
+                ready = await asyncio.to_thread(control_q_in.poll, timeout=5.0)
                 if ready:
                     # Receive control message
-                    data = await asyncio.to_thread(control.recv)
-                    msg = dmsg.parse(data)
+                    data = await asyncio.to_thread(control_q_in.get)
+                    msg = data
                     # Process control message
                     if isinstance(msg, halt_msg):
                         LOGGER.info(f"Received {type(msg)}")
                         break
                     elif isinstance(msg, dmsg.TAUpdateNodes):
                         agent.update_nodes(msg.nodes)
+                        await asyncio.to_thread(control_q_out.put, dmsg.TAUpdateNodesResponse(tag=next_tag()))
                         LOGGER.info(f"Received {type(msg)}")
                         continue
                     LOGGER.warning(f"Received unsupported control message: {msg}")
@@ -302,11 +298,11 @@ async def tcp_transport_agent(
 
     except Exception as e:
         LOGGER.exception(f"Unable to run TCP agent: {e}")
-        await asyncio.to_thread(close_connection, control)
+        await asyncio.to_thread(close_connections, (control_q_in, control_q_out))
         raise e
 
     # Hand back our connection to local services so we can signal our exit
-    return control
+    return control_q_in, control_q_out
 
 
 def main(args=None):
@@ -327,8 +323,8 @@ def main(args=None):
     parser.add_argument("--ip-addrs", metavar="FRONTEND_IP", dest="ip_addrs", nargs="+", type=str, help=FRONTEND_HELP)
     parser.add_argument("--oob-ip-addr", type=str, help="Target IP address for out-of-band communication")
     parser.add_argument("--oob-port", type=str, help="Listening port at target for out-of-band communication")
-    parser.add_argument("--ch-in-sdesc", type=B64.from_str, help="Base64 encoded serialized input channel descriptor")
-    parser.add_argument("--ch-out-sdesc", type=B64.from_str, help="Base64 encoded serialized output channel descriptor")
+    parser.add_argument("--ch-in-sdesc", help="Base64 encoded serialized input channel descriptor")
+    parser.add_argument("--ch-out-sdesc", help="Base64 encoded serialized output channel descriptor")
     parser.add_argument("--host-ids", dest="host_ids", type=str, nargs="+")
 
     parser.add_argument("-p", "--port", type=int, help="Listening port (default: %(default)s)")
@@ -459,7 +455,7 @@ def main(args=None):
             raise
 
     try:
-        control = asyncio.run(
+        control_q_in, control_q_out = asyncio.run(
             tcp_transport_agent(
                 args.node_index,
                 args.ch_in_sdesc,
@@ -490,14 +486,14 @@ def main(args=None):
 
     try:
         if user_initiated or infrastructure:
-            control.send(down_msg.serialize())
+            control_q_out.put(down_msg)
     except Exception:
         LOGGER.exception("Failed to send TAHalted")
         raise
     else:
         LOGGER.info("Sent TAHalted and exiting")
     finally:
-        close_connection(control)
+        close_connections(control_q_in, control_q_out)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@
 #include <string>
 #include <iostream>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 #include <dragon/channels.h>
@@ -88,6 +89,21 @@ class Queue {
     }
 
     /**
+     * @brief Copy constructor. The copy attaches to the same Queue on its own so
+     * both Queue objects may be used and destroyed independently.
+     */
+    Queue(const Queue& other): Queue(other.mSerialized.c_str(), nullptr) {}
+
+    /**
+     * @brief Move constructor. The attachment, if any, is transferred to the new Queue.
+     */
+    Queue(Queue&& other) noexcept: mDetachOnDestroy(other.mDetachOnDestroy), mFLI(other.mFLI),
+        mSerialized(std::move(other.mSerialized)) {
+
+        other.mDetachOnDestroy = false;
+    }
+
+    /**
      * @brief Destruct the Queue by detaching from it when created all in C/C++.
      *
      * The Queue will be detached when the FLI was not provided on the constructor. If
@@ -110,6 +126,16 @@ class Queue {
      */
     const char* serialize() {
         return mSerialized.c_str();
+    }
+
+    /**
+     * @brief Convert this Queue into a Serializable so it may be sent to another process.
+     *
+     * Only the descriptor of the Queue is carried by the Serializable. The template
+     * argument is qualified because the Queue template argument shadows the class name.
+     */
+    operator dragon::Serializable() const {
+        return dragon::Serializable(SerializableQueue<dragon::Serializable>(mSerialized));
     }
 
     /**
@@ -509,6 +535,15 @@ class Queue {
     std::string mSerialized;
 
 };
+
+template<class Serializable>
+SerializableQueue<Serializable>::SerializableQueue(Queue<Serializable>& queue):
+    mSerialized(std::string(queue.serialize())) {}
+
+template<class Value>
+Serializable::operator Queue<Value>() const {
+    return Queue<Value>(asSerializableQueue().val().c_str(), nullptr);
+}
 
 } // end dragon namespace
 

@@ -25,15 +25,17 @@ from ..dlogging.logger import DragonLoggingError
 
 from ..infrastructure.util import route, rt_uid_from_ip_addrs, get_external_ip_addr
 from ..infrastructure.parameters import POLICY_INFRASTRUCTURE, this_process
-from ..infrastructure.connection import Connection, ConnectionOptions
 from ..infrastructure.node_desc import NodeDescriptor
 from ..infrastructure import facts as dfacts
 from ..infrastructure import messages as dmsg
+
+from ..infrastructure.queue import InfraQueue
 
 from . import util as dlutil
 from .network_config import NetworkConfig
 from .launchargs import parse_hosts
 from .wlm import WLM, wlm_cls_dict
+from .wlm.base import BaseWLM
 from .wlm.k8s import KubernetesNetworkConfig
 
 LAUNCHER_FAIL_EXIT = 1
@@ -156,10 +158,13 @@ class LauncherFrontEnd:
         self.hostlist = args_map.get("hostlist", None)
         self.hostfile = args_map.get("hostfile", None)
 
+        self.wlm_cls: Optional[type[BaseWLM]] = wlm_cls_dict[self._wlm] if self._wlm else None
+
         # Don't default wlm in argparse. We can better do its error/case handling outside of
         # argparse/make it easier to test
         if self._wlm is None:
-            self._wlm = dlutil.detect_wlm()
+            self.wlm_cls = dlutil.detect_wlm()
+            self._wlm = WLM.from_str(self.wlm_cls.name) if self.wlm_cls else None
 
         # If using SSH, confirm we have enough info do that:
         if self._wlm in (WLM.SSH, WLM.DRUN) and self._config_from_file is None:
@@ -167,8 +172,6 @@ class LauncherFrontEnd:
             if self._wlm is WLM.SSH and not self.hostlist:
                 raise RuntimeError("SSH workload manager requires a valid hostlist or hostfile")
 
-        # Get an instance of the workload manager helper class
-        self.wlm_cls = wlm_cls_dict.get(WLM.from_str(self._wlm), None)
         if not self.wlm_cls:
             raise RuntimeError(f"Unsupported workload manager specified: {self._wlm}")
         self.wlm_obj = self.wlm_cls(self.network_prefix, self.port, self.hostlist)
@@ -223,6 +226,7 @@ class LauncherFrontEnd:
         log.debug("doing __exit__ cleanup")
         if exc_type is not None:
             from traceback import print_tb
+
             log.debug("Exception type: %s, value: %s", exc_type, exc_value)
             print_tb(exc_tb)
         self._cleanup()
@@ -277,7 +281,7 @@ class LauncherFrontEnd:
             log.debug("Updated state to %s", self._STATE)
             try:
                 assert self.conn_outs is not None
-                self.conn_outs[0].send(dmsg.GSTeardown(tag=dlutil.next_tag()).serialize())
+                self.conn_outs[0].put(dmsg.GSTeardown(tag=dlutil.next_tag()))
             except Exception:
                 raise TimeoutError
             log.info("got GSTeardown out")
@@ -285,7 +289,7 @@ class LauncherFrontEnd:
             try:
                 while True:
                     try:
-                        msg = dlutil.get_with_timeout(self.conn_in, timeout=self._sigint_timeout)
+                        msg = dlutil.q_get_with_timeout(self.conn_in, timeout=self._sigint_timeout)
 
                         if isinstance(msg, dmsg.BEHalted):
                             log.debug("Breaking due to BEHalted")
@@ -407,7 +411,7 @@ class LauncherFrontEnd:
         """Wait until overlay network returns OverlayPingLA signaling it is up"""
         log = logging.getLogger("overlay_startup")
         log.info("Channel tree initializing...")
-        ping_back = dlutil.get_with_blocking(self.local_inout)
+        ping_back = dlutil.q_get_with_blocking(self.local_in_q)
         assert isinstance(ping_back, dmsg.OverlayPingLA)
         log.debug("recvd msg type %s", type(ping_back))
         self._STATE = FrontendState.OVERLAY_UP
@@ -417,22 +421,22 @@ class LauncherFrontEnd:
         log = logging.getLogger("close_overlay")
         if self._STATE >= FrontendState.OVERLAY_UP:
             try:
-                self.local_inout.send(dmsg.LAHaltOverlay(tag=dlutil.next_tag()).serialize())
+                self.local_out_q.put(dmsg.LAHaltOverlay(tag=dlutil.next_tag()))
                 log.debug("sent halt overlay signal ")
 
                 # If we're in an abnormal exit, make sure to not block
                 try:
                     if abnormal:
-                        overlay_halted = dlutil.get_with_timeout(self.local_inout, timeout=self._sigint_timeout)
+                        overlay_halted = dlutil.q_get_with_timeout(self.local_in_q, timeout=self._sigint_timeout)
                     else:
-                        overlay_halted = dlutil.get_with_blocking(self.local_inout)
+                        overlay_halted = dlutil.q_get_with_blocking(self.local_in_q)
                 except TimeoutError:
                     log.debug("timeout on recv dmsg.OverlayHalted")
                 else:
                     log.debug("received %s from local TCP agent", overlay_halted)
                     assert isinstance(overlay_halted, dmsg.OverlayHalted)
 
-            except (AttributeError, ConnectionError):
+            except (AttributeError, ValueError):
                 pass
 
         # Make sure the overlay is down before continuing
@@ -456,7 +460,7 @@ class LauncherFrontEnd:
                 if abnormal:
                     log.info("abnormal closing of recv overlay thread")
                     self._shutdown.set()
-                    self.conn_in_bd.send(halt_overlay_msg.serialize())
+                    self.conn_in_bd.put(halt_overlay_msg)
                 self.recv_overlaynet_thread.join()
         log.info("recv_overlaynet_thread joined")
 
@@ -495,7 +499,7 @@ class LauncherFrontEnd:
                 # allows the stream transport to exit below if it should
                 # be stuck in a send because the channel was full. Otherwise
                 # if the channel is full, the transport will not cleanly exit.
-                msg = dlutil.get_with_timeout(self.conn_in, timeout=self._sigint_timeout)
+                msg = dlutil.q_get_with_timeout(self.conn_in, timeout=self._sigint_timeout)
                 if type(msg) in LauncherFrontEnd._DTBL:
                     log.debug("routing message of type %s during cleanup", type(msg))
                     self._DTBL[type(msg)][0](self, msg=msg)
@@ -513,7 +517,6 @@ class LauncherFrontEnd:
         try:
             log.info("shutting down frontend overlay tree agent")
             self._close_overlay(abnormal=abnormal)
-
         except Exception:
             if abnormal:
                 log.info("killing overlay on frontend")
@@ -550,10 +553,15 @@ class LauncherFrontEnd:
             pass
 
         try:
-            self.local_inout.close()
+            self.local_in_q.close()
         except Exception:
             pass
-        log.debug("local_input closed")
+        log.debug("local_in_q closed")
+        try:
+            self.local_out_q.close()
+        except Exception:
+            pass
+        log.debug("local_out_q closed")
 
         try:
             if self.local_ch_in is not None:
@@ -736,7 +744,7 @@ class LauncherFrontEnd:
         log = logging.getLogger(dls.LA_FE).getChild("_launch_backend")
 
         assert self.wlm_obj
-        log.debug("Launching backend with wlm %s (wlm_obj=%s)", self._wlm, self.wlm_obj)
+        log.debug("Launching backend with wlm %s", self._wlm)
         wlm_proc = self.wlm_obj.launch_backend(
             nnodes=nnodes,
             node_ip_addrs=node_ip_addrs,
@@ -753,7 +761,7 @@ class LauncherFrontEnd:
 
         return wlm_proc
 
-    def construct_bcast_tree(self, net_conf, conn_policy, be_ups, frontend_sdesc):
+    def construct_bcast_tree(self, net_conf, be_ups, frontend_sdesc):
         log = logging.getLogger(dls.LA_FE).getChild("construct_bcast_tree")
 
         # Pack up all of our node descriptors for the backend:
@@ -782,7 +790,7 @@ class LauncherFrontEnd:
                 )
 
         # Send out the FENodeIdx to the child nodes I own
-        conn_outs = {}  # key is the node_index and value is the Connection object
+        conn_outs = {}  # key is the node_index and value is the Queue object
 
         # Create a mapping of node indices to their key in the network config
         net_conf_key_mapping = [k for k, v in net_conf.items() if v.state is NodeDescriptor.State.ACTIVE]
@@ -810,18 +818,12 @@ class LauncherFrontEnd:
                     fe_node_index,
                 )
                 try:
-                    be_sdesc = B64.from_str(forwarding[str(idx)].overlay_cd)
-                    be_ch = Channel.attach(be_sdesc.decode(), mem_pool=self.fe_mpool)
-                    conn_options = ConnectionOptions(
-                        default_pool=self.fe_mpool, min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23
-                    )
-                    conn_out = Connection(outbound_initializer=be_ch, options=conn_options, policy=conn_policy)
-                    conn_out.ghost = True
+                    conn_out = InfraQueue.attach(forwarding[str(idx)].overlay_cd, mpool=self.fe_mpool)
 
                     # Update the node index to the one we're talking to
                     fe_node_idx_msg.node_index = fe_node_index
                     log.debug("sending %s", fe_node_idx_msg.uncompressed_serialize())
-                    conn_out.send(fe_node_idx_msg.serialize())
+                    conn_out.put(fe_node_idx_msg)
 
                     conn_outs[fe_node_index] = conn_out
                     fe_node_index = fe_node_index + 1
@@ -997,7 +999,7 @@ Performance may be suboptimal."""
                     raise RuntimeError("Unable to acquire backend network configuration from input file.")
             else:
                 try:
-                    log.info("Acquiring network config via WLM queries")
+                    log.info("Acquiring network config via %s WLM queries", self._wlm)
                     # This sigint trigger is -2 and -1 cases
                     self.net = NetworkConfig.from_wlm(
                         workload_manager=self._wlm,
@@ -1109,9 +1111,6 @@ Performance may be suboptimal."""
                 os.environ["DRAGON_RT_UID"] = str(rt_uid_from_ip_addrs(fe_ext_ip_addr, head_node_ip_addr))
 
         # Create my memory pool
-        conn_options = ConnectionOptions(min_block_size=2**16)
-        conn_policy = POLICY_INFRASTRUCTURE
-
         try:
             # Create my memory pool
             if self._wlm is WLM.K8S:
@@ -1140,23 +1139,12 @@ Performance may be suboptimal."""
             local_out_cuid = dfacts.FE_LOCAL_OUT_CUID
             gw_cuid = dfacts.FE_GW_CUID
 
-            # Channel for backend to come to
-            self.fe_inbound = Channel(self.fe_mpool, fe_cuid)
-            encoded_inbound = B64(self.fe_inbound.serialize())
-            encoded_inbound_str = str(encoded_inbound)
-            self.conn_in = Connection(inbound_initializer=self.fe_inbound, options=conn_options, policy=conn_policy)
-
             if self._sigint_trigger == 1:
                 signal.raise_signal(signal.SIGINT)
-
-            # Backdoor connection for breaking recv_msgs thread out of
-            # its blocking receive at teardown
-            self.conn_in_bd = Connection(outbound_initializer=self.fe_inbound)
 
             # Channel for tcp to tell me it's up
             self.local_ch_in = Channel(self.fe_mpool, local_in_cuid)
             self.local_ch_out = Channel(self.fe_mpool, local_out_cuid)
-            self.local_inout = Connection(inbound_initializer=self.local_ch_in, outbound_initializer=self.local_ch_out)
 
             # Create a gateway and logging channel for my tcp agent
             self.gw_ch = Channel(self.fe_mpool, gw_cuid)
@@ -1175,6 +1163,20 @@ Performance may be suboptimal."""
         gw_chan_env = dfacts.GW_ENV_PREFIX + str(dfacts.DRAGON_OVERLAY_DEFAULT_NUM_GW_CHANNELS_PER_NODE)
         os.environ[gw_chan_env] = encoded_ser_gw_str
         register_gateways_from_env()
+
+        try:
+            self.fe_inbound = Channel(self.fe_mpool, fe_cuid)
+            # Channel for backend to come to
+            self.conn_in = InfraQueue(main_channel=self.fe_inbound, pool=self.fe_mpool)
+            encoded_inbound_str = self.conn_in.serialize()
+            # Backdoor connection for breaking recv_msgs thread out of
+            # its blocking receive at teardown
+            self.conn_in_bd = self.conn_in
+            self.local_in_q = InfraQueue(main_channel=self.local_ch_in, pool=self.fe_mpool)
+            self.local_out_q = InfraQueue(main_channel=self.local_ch_out, pool=self.fe_mpool)
+        except (ChannelError, DragonPoolError, DragonLoggingError, DragonMemoryError) as init_err:
+            log.fatal("could not create resources: %s", init_err)
+            raise RuntimeError("overlay transport resource creation failed") from init_err
 
         # For K8s launch: create the BEs
         if self._wlm is WLM.K8S:
@@ -1337,8 +1339,8 @@ Performance may be suboptimal."""
         try:
             self.over_proc = start_overlay_network(
                 overlay_transport=self.overlay_transport,
-                ch_in_sdesc=B64(self.local_ch_out.serialize()),
-                ch_out_sdesc=B64(self.local_ch_in.serialize()),
+                ch_in_sdesc=self.local_out_q.serialize(),
+                ch_out_sdesc=self.local_in_q.serialize(),
                 log_sdesc=self.logging_queue.serialize(),
                 host_ids=host_ids,
                 ip_addrs=ip_addrs,
@@ -1425,12 +1427,12 @@ Performance may be suboptimal."""
         # the hierarchical bcast info and send FENodeIdxBE to those
         # nodes
         log.info("received %s BEIsUp msgs", self.nnodes)
-        self.conn_outs = self.construct_bcast_tree(self.net_conf, conn_policy, be_ups, encoded_inbound_str)
+        self.conn_outs = self.construct_bcast_tree(self.net_conf, be_ups, encoded_inbound_str)
         del be_ups
 
         chs_up = [dlutil.get_with_blocking(self.la_fe_stdin) for _ in range(self.nnodes)]
         for ch_up in chs_up:
-            assert isinstance(ch_up, dmsg.SHChannelsUp), "la_fe received invalid channel up"
+            assert isinstance(ch_up, dmsg.LSChannelsUp), "la_fe received invalid channel up"
         log.info("received %s SHChannelsUP msgs", self.nnodes)
 
         # Replace dynamically discovered IP addresses with those specified in network config.
@@ -1443,14 +1445,14 @@ Performance may be suboptimal."""
                 pass
 
         nodes_desc = {ch_up.idx: ch_up.node_desc for ch_up in chs_up}
-        gs_cds = [ch_up.gs_cd for ch_up in chs_up if ch_up.gs_cd is not None]
-        if len(gs_cds) == 0:
+        gs_qds = [ch_up.gs_qd for ch_up in chs_up if ch_up.gs_qd is not None]
+        if len(gs_qds) == 0:
             print(
-                "The Global Services CD was not returned by any of the SHChannelsUp messages. Launcher Exiting.",
+                "The Global Services CD was not returned by any of the LSChannelsUp messages. Launcher Exiting.",
                 flush=True,
             )
             sys.exit(LAUNCHER_FAIL_EXIT)
-        gs_cd = gs_cds[0]
+        gs_qd = gs_qds[0]
 
         # Set the number of gateway channels per node. When HSTA is used and multiple
         # NICs per node are available, we can use multi-nic support. In this case, the
@@ -1475,14 +1477,14 @@ Performance may be suboptimal."""
         la_ch_info = dmsg.LAChannelsInfo(
             tag=dlutil.next_tag(),
             nodes_desc=nodes_desc,
-            gs_cd=gs_cd,
+            gs_qd=gs_qd,
             num_gw_channels=num_gw_channels,
             port=self.port,
             transport=str(self.transport),
             fe_ext_ip_addr=fe_ext_ip_addr,
         )
         log.debug("la_fe la_channels.nodes_desc: %s", la_ch_info.nodes_desc)
-        log.debug("la_fe la_channels.gs_cd: %s", la_ch_info.gs_cd)
+        log.debug("la_fe la_channels.gs_qd: %s", la_ch_info.gs_qd)
         log.debug("la_fe la_channels.transport: %s", la_ch_info.transport)
         self.la_fe_stdout.send("A", la_ch_info.serialize())
         log.info("sent LACHannelsInfo to overlaynet fe")
@@ -1507,7 +1509,7 @@ Performance may be suboptimal."""
         return self.net_conf
 
     def run_telem(self, level: int = 0):
-        """Start telem app execution via GSProcessCreate or SHProcessCreate"""
+        """Start telem app execution via GSProcessCreate or LSProcessCreate"""
         self._STATE = FrontendState.APP_EXECUTION
         log = logging.getLogger(dls.LA_FE).getChild("run_telem`")
 
@@ -1515,7 +1517,7 @@ Performance may be suboptimal."""
 
         # Send message to start user application
         if self.transport_test_env:
-            # start a process on each shepherd with an SHProcessCreate broadcast to all shepherds
+            # start a process on each shepherd with an LSProcessCreate broadcast to all shepherds
             # build a dictionary mapping each node_index to the test channels created on that node.
             raise NotImplementedError
         else:
@@ -1538,7 +1540,7 @@ Performance may be suboptimal."""
         return self.net_conf
 
     def run_app(self, restart=False):
-        """Start user app execution via GSProcessCreate or SHProcessCreate"""
+        """Start user app execution via GSProcessCreate or LSProcessCreate"""
         self._STATE = FrontendState.APP_EXECUTION
         log = logging.getLogger(dls.LA_FE).getChild("run_app")
 
@@ -1546,7 +1548,7 @@ Performance may be suboptimal."""
 
         # Send message to start user application
         if self.transport_test_env:
-            # start a process on each shepherd with an SHProcessCreate broadcast to all shepherds
+            # start a process on each shepherd with an LSProcessCreate broadcast to all shepherds
             # build a dictionary mapping each node_index to the test channels created on that node.
             node_idx_to_channels_map = dict((msg.idx, msg.test_channels) for msg in self.tas_up)
             start_msg = dlutil.mk_shproc_start_msg(logbase=dls.LA_FE, stdin_str=str(node_idx_to_channels_map))
@@ -1643,11 +1645,11 @@ Performance may be suboptimal."""
         # No global services so it's being overlooked
         elif self.transport_test_env:
             if self._proc_create_resps == self.nnodes and self._proc_exits == self.nnodes:
-                # m7.1 Send SHHaltTA to All BEs
+                # m7.1 Send LSHaltTA to All BEs
                 self._STATE = FrontendState.TEARDOWN
-                sh_halt_ta = dmsg.SHHaltTA(tag=dlutil.next_tag())
+                sh_halt_ta = dmsg.LSHaltTA(tag=dlutil.next_tag())
                 self.la_fe_stdout.send("A", sh_halt_ta.serialize())
-                self.msg_log.info("m7.1 transmitted SHHaltTA msg to BE")
+                self.msg_log.info("m7.1 transmitted LSHaltTA msg to BE")
         else:
             self.msg_log.debug(
                 "gs_head_exit: %s | gs_proc_create_resp: %s",
@@ -1655,9 +1657,9 @@ Performance may be suboptimal."""
                 self._gs_process_create_resp_received,
             )
 
-    @route(dmsg.SHFwdOutput, _DTBL)
-    def handle_sh_fwd_output(self, msg: dmsg.SHFwdOutput):
-        msg_out = self.build_stdmsg(msg, self.args_map, msg.fd_num == dmsg.SHFwdOutput.FDNum.STDOUT.value)
+    @route(dmsg.LSFwdOutput, _DTBL)
+    def handle_sh_fwd_output(self, msg: dmsg.LSFwdOutput):
+        msg_out = self.build_stdmsg(msg, self.args_map, msg.fd_num == dmsg.LSFwdOutput.FDNum.STDOUT.value)
         self.msg_log.debug("%s", msg)
         print(msg_out, end="", flush=True)
 
@@ -1692,16 +1694,16 @@ Performance may be suboptimal."""
             self.msg_log.warning("Unable to start the head process %s", msg.err_info)
             self._cleanup_abnormal_state(sigint=False)
 
-    @route(dmsg.SHProcessCreateResponse, _DTBL)
-    def handle_sh_proc_create_response(self, msg: dmsg.SHProcessCreateResponse):
+    @route(dmsg.LSProcessCreateResponse, _DTBL)
+    def handle_sh_proc_create_response(self, msg: dmsg.LSProcessCreateResponse):
         self._proc_create_resps += 1
-        self.msg_log.info("Got %s SHProcessCreateResponse messages", self._proc_create_resps)
+        self.msg_log.info("Got %s LSProcessCreateResponse messages", self._proc_create_resps)
         self.probe_teardown()
 
-    @route(dmsg.SHProcessExit, _DTBL)
-    def handle_sh_proc_exit(self, msg: dmsg.SHProcessExit):
+    @route(dmsg.LSProcessExit, _DTBL)
+    def handle_sh_proc_exit(self, msg: dmsg.LSProcessExit):
         self._proc_exits += 1
-        self.msg_log.info("Got %s SHProcessExit messages", self._proc_exits)
+        self.msg_log.info("Got %s LSProcessExit messages", self._proc_exits)
         self.probe_teardown()
 
     @route(dmsg.GSHalted, _DTBL)
@@ -1709,34 +1711,34 @@ Performance may be suboptimal."""
         # m6.2 recv GSHalted from Primary BE
         self.msg_log.info("m6.2 la_fe received GSHalted")
 
-        # m7.1 Send SHHaltTA to All BEs
-        sh_halt_ta = dmsg.SHHaltTA(tag=dlutil.next_tag())
+        # m7.1 Send LSHaltTA to All BEs
+        sh_halt_ta = dmsg.LSHaltTA(tag=dlutil.next_tag())
 
         try:
             if self._STATE != FrontendState.ABNORMAL_TEARDOWN:
                 self.la_fe_stdout.send("A", sh_halt_ta.serialize())
-                self.msg_log.info("m7.1 transmitted SHHaltTA msg to BE via threads: %s", self._STATE)
+                self.msg_log.info("m7.1 transmitted LSHaltTA msg to BE via threads: %s", self._STATE)
             else:
                 self._overlay_bcast(sh_halt_ta)
-                self.msg_log.info("m7.1 transmitted SHHaltTA msg to BE directly")
+                self.msg_log.info("m7.1 transmitted LSHaltTA msg to BE directly")
         except Exception as e:
-            self.msg_log.warning(f"Exception sending SHHaltTA %s", e)
+            self.msg_log.warning("Exception sending LSHaltTA %s", e)
 
     @route(dmsg.TAHalted, _DTBL)
     def handle_ta_halted(self, msg: dmsg.TAHalted):
         self._tas_halted += 1
         if self._tas_halted == self.nnodes:
             self.msg_log.info("m10.2 la_fe received All TAHalted messages")
-            sh_teardown = dmsg.SHTeardown(tag=dlutil.next_tag())
+            sh_teardown = dmsg.LSTeardown(tag=dlutil.next_tag())
 
             if self._STATE != FrontendState.ABNORMAL_TEARDOWN:
-                # m11.1 Send SHTeardown to all BE's
+                # m11.1 Send LSTeardown to all BE's
                 self.la_fe_stdout.send("A", sh_teardown.serialize())
-                self.msg_log.info("m11.1 la_fe transmitted SHTeardown msg to BE via threads")
+                self.msg_log.info("m11.1 la_fe transmitted LSTeardown msg to BE via threads")
 
             try:
                 self._overlay_bcast(sh_teardown)
-                self.msg_log.info("m11.1 la_fe transmitted SHTeardown msg to BE directly")
+                self.msg_log.info("m11.1 la_fe transmitted LSTeardown msg to BE directly")
             except Exception:
                 pass
 
@@ -1750,11 +1752,11 @@ Performance may be suboptimal."""
             except TypeError:
                 pass
 
-    @route(dmsg.SHHaltBE, _DTBL)
-    def handle_sh_halt_be(self, msg: dmsg.SHHaltBE):
+    @route(dmsg.LSHaltBE, _DTBL)
+    def handle_sh_halt_be(self, msg: dmsg.LSHaltBE):
         self._sh_halt_be += 1
         if self._sh_halt_be == self.nnodes:
-            self.msg_log.info("Received all SHHaltBE messages")
+            self.msg_log.info("Received all LSHaltBE messages")
 
             be_halted = dmsg.BEHalted(tag=dlutil.next_tag())
 
@@ -1767,10 +1769,10 @@ Performance may be suboptimal."""
 
                 # signal the end of the logging thread by sending its way
                 # an halt message
-                msg = dmsg.HaltLoggingInfra(tag=dlutil.next_tag())
-                self.logging_queue.put(msg)
+                halt_logging_msg = dmsg.HaltLoggingInfra(tag=dlutil.next_tag())
+                self.logging_queue.put(halt_logging_msg)
 
-                self.conn_in_bd.send(be_halted.serialize())
+                self.conn_in_bd.put(be_halted)
                 self.msg_log.info("sent BEHalted to break overlay recv out of loop")
 
             else:
@@ -1827,7 +1829,7 @@ Performance may be suboptimal."""
         """
 
         for conn_out in self.conn_outs.values():
-            conn_out.send(msg.serialize())
+            conn_out.put(msg)
 
     def _send_msgs_to_overlaynet(self, la_fe_stdout: dlutil.LaOverlayNetFEQueue):
         """Thread that send Messages from frontend to backend service
@@ -1848,7 +1850,7 @@ Performance may be suboptimal."""
 
                 if target == "P":
                     # node index 0 is the primary node
-                    self.conn_outs[0].send(fe_msg.serialize())
+                    self.conn_outs[0].put(fe_msg)
                     log.info("target = %s -- msg = %s", target, fe_msg.__class__)
                 else:
                     self._overlay_bcast(fe_msg)
@@ -1944,7 +1946,7 @@ Performance may be suboptimal."""
             log.debug("send abnormal term from except block")
             raise
 
-    def build_stdmsg(self, msg: dmsg.SHFwdOutput, arg_map, is_stdout=True):
+    def build_stdmsg(self, msg: dmsg.LSFwdOutput, arg_map, is_stdout=True):
         if arg_map["no_label"]:
             return f"{msg.data}"
 

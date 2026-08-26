@@ -27,8 +27,9 @@ class TestHitlTcpBridgeInit(TestCase):
         self.assertEqual(host, "127.0.0.1")
         self.assertIsInstance(port, int)
         self.assertGreater(port, 0)
-        # Not started — only set the shutdown flag (don't join)
-        bridge._shutdown.set()
+        # Never started — stop() must still close the listening socket so the
+        # fd is not leaked (otherwise: ResourceWarning: unclosed socket).
+        bridge.stop()
 
     def test_is_daemon_thread(self):
         """Bridge runs as a daemon thread (dies with the parent process)."""
@@ -37,7 +38,7 @@ class TestHitlTcpBridgeInit(TestCase):
         mock_queue = MagicMock()
         bridge = HitlTcpBridge(mock_queue, host="127.0.0.1", port=0)
         self.assertTrue(bridge.daemon)
-        bridge._shutdown.set()
+        bridge.stop()
 
 
 class TestHitlTcpBridgeStop(TestCase):

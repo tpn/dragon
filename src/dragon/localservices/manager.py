@@ -385,10 +385,10 @@ New Processes:
 
             # If notification needs to be sent with the PID then send it.
             if p.resp_queue is not None:
-                self.shepherd.log.info("SENDING SHProcessCreateResponse")
+                self.shepherd.log.info("SENDING LSProcessCreateResponse")
                 p.resp_queue.send(
-                    dmsg.SHProcessCreateResponse(
-                        tag=0, ref=p.tag_ref, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+                    dmsg.LSProcessCreateResponse(
+                        tag=0, ref=p.tag_ref, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
                     ).serialize()
                 )
 
@@ -396,8 +396,8 @@ New Processes:
             try:
                 p.state = Process.State.FAIL
                 p.resp_queue.send(
-                    dmsg.SHProcessCreateResponse(
-                        tag=0, ref=p.tag_ref, err=dmsg.SHProcessCreateResponse.Errors.FAIL, err_info=str(ex)
+                    dmsg.LSProcessCreateResponse(
+                        tag=0, ref=p.tag_ref, err=dmsg.LSProcessCreateResponse.Errors.FAIL, err_info=str(ex)
                     ).serialize()
                 )
                 self.shepherd.log.info("Sent Failed ProcessCreateResponse")
@@ -432,9 +432,9 @@ New Processes:
         if process.state == Process.State.RUN:
             process.state = Process.State.COMPLETE
             if process.term_queue is not None:
-                self.shepherd.log.info("SENDING SHProcessExit message")
+                self.shepherd.log.info("SENDING LSProcessExit message")
                 process.term_queue.send(
-                    dmsg.SHProcessExit(
+                    dmsg.LSProcessExit(
                         tag=0, p_uid=process.p_uid, exit_code=process._stat.returncode, creation_msg_tag=None
                     ).serialize()
                 )
@@ -465,8 +465,8 @@ New Processes:
                     output_queue = process.output_queue[stream_type]
 
                     if output_queue is not None:
-                        self.shepherd.log.info(f"SENDING SHFwdOutput: {output!s}")
-                        fwd_output_msg = dmsg.SHFwdOutput(
+                        self.shepherd.log.info(f"SENDING LSFwdOutput: {output!s}")
+                        fwd_output_msg = dmsg.LSFwdOutput(
                             tag=0,
                             idx=self.shepherd.node_index,
                             p_uid=process.p_uid,

@@ -21,6 +21,7 @@ from .io import Payload
 
 LOGGER = logging.getLogger("dragon.transport.tcp.transport")
 
+
 @dataclass(frozen=True)
 class Address:
     """Node address"""
@@ -379,6 +380,8 @@ class StreamTransport(Transport, TaskMixin):
         self._recv_tasks = defaultdict(WeakSet)
         self._mailboxes = defaultdict(asyncio.Queue)
         self._send_tasks = WeakValueDictionary()
+        # Strong references to running send/recv tasks. I hit GeneratorExit and a "Task was destroyed but it is pending!" warning while scaling the TCP overlay. This caused a hang but was clear in the logs. Apparently, asyncio only holds weak references to tasks, so without this an in-flight task (e.g., one suspended mid-connect to a slow/unreachable peer) can be reaped by the garbage collector. Tasks remove themselves from the set via a done callback when they complete.
+        self._task_refs = set()
         self._oob_connect = False
         self._oob_accept = False
 
@@ -421,6 +424,7 @@ class StreamTransport(Transport, TaskMixin):
                 t.cancel()
             await asyncio.gather(*send_tasks, return_exceptions=True)
         self._send_tasks.clear()
+        self._task_refs.clear()
         # Close and clean up writers
         closing_writers = [close_writer(w) for w in chain.from_iterable(self._writers.values())]
         if closing_writers:
@@ -499,6 +503,8 @@ class StreamTransport(Transport, TaskMixin):
         self._writers[addr].append(writer)
         task = asyncio.create_task(self._do_recv(addr, reader), name=f"{type(self).__name__}-Receiver-{addr}")
         self._recv_tasks[addr].add(task)
+        self._task_refs.add(task)
+        task.add_done_callback(self._task_refs.discard)
         LOGGER.debug(f"Added connection to {addr}")
 
     async def connect(self, addr: Address) -> asyncio.StreamWriter:
@@ -596,9 +602,10 @@ class StreamTransport(Transport, TaskMixin):
         if task is None:
             # (Re-)Start send task
             LOGGER.debug(f"Starting sender: {type(self).__name__}-Sender-{addr}")
-            self._send_tasks[addr] = asyncio.create_task(
-                self._do_send(addr), name=f"{type(self).__name__}-Sender-{addr}"
-            )
+            task = asyncio.create_task(self._do_send(addr), name=f"{type(self).__name__}-Sender-{addr}")
+            self._send_tasks[addr] = task
+            self._task_refs.add(task)
+            task.add_done_callback(self._task_refs.discard)
 
     @run_forever
     async def _do_send(self, addr: Address) -> None:

@@ -21,12 +21,11 @@ from .wlm.k8s import KubernetesNetworkConfig
 
 from ..dlogging.util import setup_dragon_logging, setup_BE_logging, detach_from_dragon_handler
 from ..dlogging.util import DragonLoggingServices as dls
+from ..infrastructure.queue import InfraQueue
 from ..native.queue import Queue
-
 from ..infrastructure import facts as dfacts
 from ..infrastructure import messages as dmsg
 from ..infrastructure.node_desc import NodeDescriptor
-from ..infrastructure.connection import Connection, ConnectionOptions
 from ..infrastructure.parameters import POLICY_INFRASTRUCTURE, this_process
 from ..infrastructure.util import NewlineStreamWrapper, route
 
@@ -199,7 +198,7 @@ class LauncherBackEnd:
                 if abnormal:
                     log.info("abnormal closing of recv overlay thread")
                     self._shutdown.set()
-                    self.infra_in_bd.send(halt_overlay_msg.serialize())
+                    self.infra_in.put(halt_overlay_msg)
                 self.recv_overlaynet_thread.join()
         except AttributeError:
             pass
@@ -227,7 +226,7 @@ class LauncherBackEnd:
         try:
             if self.channel_monitor_thread.is_alive():
                 if abnormal:
-                    self.la_queue_bd.send(halt_overlay_msg.serialize())
+                    self.la_queue_bd.put(halt_overlay_msg)
                 self.recv_overlaynet_thread.join()
         except AttributeError:
             pass
@@ -241,26 +240,13 @@ class LauncherBackEnd:
 
         log = logging.getLogger(dls.LA_BE).getChild("_close_conns")
         try:
-            log.debug("local_inout close")
-            self.local_inout.close()
+            log.debug("local_in_q close")
+            self.local_in_q.close()
         except Exception:
             pass
-
         try:
-            log.debug("local_in close")
-            self.local_in.close()
-        except Exception:
-            pass
-
-        try:
-            log.debug("local_in_be close")
-            self.local_in_be.close()
-        except Exception:
-            pass
-
-        try:
-            log.debug("local_out close")
-            self.local_out.close()
+            log.debug("local_out_q close")
+            self.local_out_q.close()
         except Exception:
             pass
 
@@ -360,7 +346,7 @@ class LauncherBackEnd:
 
         if self._state < BackendState.OVERLAY_THREADS_UP:
             log.debug(f"sending {type(msg)} via frontend channel rather than send_overlay thread")
-            self.infra_out.send(msg)
+            self.infra_out.put(msg)
         else:
             log.debug(f"sending {type(msg)} message to send_overlay thread")
             self.la_be_stdout.send(msg)
@@ -382,11 +368,11 @@ class LauncherBackEnd:
             if isinstance(msg, dmsg.GSTeardown):
                 self._handle_abnormal_gsteardown(dmsg.GSHalted(tag=dlutil.next_tag()).serialize())
 
-            elif isinstance(msg, dmsg.SHHaltTA):
+            elif isinstance(msg, dmsg.LSHaltTA):
                 self._handle_abnormal_gsteardown(dmsg.TAHalted(tag=dlutil.next_tag()).serialize())
 
-            elif isinstance(msg, dmsg.SHTeardown):
-                self._handle_abnormal_gsteardown(dmsg.SHHaltBE(tag=dlutil.next_tag()).serialize())
+            elif isinstance(msg, dmsg.LSTeardown):
+                self._handle_abnormal_gsteardown(dmsg.LSHaltBE(tag=dlutil.next_tag()).serialize())
 
             elif isinstance(msg, dmsg.BEHalted):
                 pass
@@ -396,8 +382,8 @@ class LauncherBackEnd:
         log = logging.getLogger(dls.LA_BE).getChild("_close_overlay_comms")
 
         log.info("shutting down overlay tree agent")
-        self.local_inout.send(dmsg.BEHaltOverlay(tag=dlutil.next_tag()).serialize())
-        ta_halted = dlutil.get_with_blocking(self.local_inout)
+        self.local_out_q.put(dmsg.BEHaltOverlay(tag=dlutil.next_tag()))
+        ta_halted = dlutil.q_get_with_blocking(self.local_in_q)
         assert isinstance(ta_halted, dmsg.OverlayHalted)
         self.msg_log.info(f"received {ta_halted} from local TCP agent")
         try:
@@ -411,10 +397,6 @@ class LauncherBackEnd:
         log.info("destroying tcp channels")
         self.infra_out.close()
         log.debug("infra out closed")
-        self.infra_logging_out.close()
-        log.debug("infra logging out closed")
-        self.infra_abnormalterm_out.close()
-        log.debug("infra abnormalterm out closed")
         self.infra_in.close()
         log.debug("infra in closed")
 
@@ -430,7 +412,8 @@ class LauncherBackEnd:
             del os.environ[dfacts.GW_ENV_PREFIX + str(dfacts.DRAGON_OVERLAY_DEFAULT_NUM_GW_CHANNELS_PER_NODE)]
         except KeyError:
             pass
-        self.local_inout.close()
+        self.local_in_q.close()
+        self.local_out_q.close()
         log.debug("local_inout closed")
 
         for conn in self.frontend_fwd_conns.values():
@@ -468,7 +451,8 @@ class LauncherBackEnd:
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 name="local services",
-                notify_channel=self.infra_abnormalterm_out,
+                notify_channel_sdesc=self.infra_out.serialize(),
+                notify_channel_pool_sdesc=self.be_mpool.serialize(),
                 notify_msg=dmsg.AbnormalTermination,
             )
         except Exception as ex:
@@ -516,16 +500,10 @@ class LauncherBackEnd:
 
         log.info(f"{self.node_idx} forward to nodes {ids_to_forward}")
 
-        conn_options = ConnectionOptions(
-            default_pool=self.be_mpool, min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23
-        )
-        conn_policy = POLICY_INFRASTRUCTURE
         for idx in ids_to_forward:
-            outbound = Channel.attach(
-                B64.from_str(node_info[str(net_conf_key_mapping[idx])].overlay_cd).decode(), mem_pool=self.be_mpool
+            fwd_conns[idx] = InfraQueue.attach(
+                node_info[str(net_conf_key_mapping[idx])].overlay_cd, mpool=self.be_mpool
             )
-            fwd_conns[idx] = Connection(outbound_initializer=outbound, options=conn_options, policy=conn_policy)
-            fwd_conns[idx].ghost = True
 
         return fwd_conns
 
@@ -584,7 +562,7 @@ class LauncherBackEnd:
             self.be_label_selector = f"app={os.getenv('BACKEND_JOB_LABEL')}"
             self.kubernetes = KubernetesNetworkConfig()
 
-            frontend_sdesc = B64.from_str(os.getenv("DRAGON_FE_SDESC"))
+            frontend_sdesc = os.getenv("DRAGON_FE_SDESC")
             fe_label_selector = f"app={os.getenv('FE_LABEL_SELECTOR')}"
             self.hostname = os.getenv("HOSTNAME")
             pod_uid = os.getenv("POD_UID")
@@ -636,52 +614,14 @@ class LauncherBackEnd:
             log.info(f"be_mpool has uid {puid} and file {mpool_fname}")
 
             # Create my receiving channels:
-            self.be_inbound = Channel(self.be_mpool, be_cuid)
             self.local_ch_in = Channel(self.be_mpool, local_cuid_in)
             self.local_ch_out = Channel(self.be_mpool, local_cuid_out)
-            conn_options = ConnectionOptions(
-                default_pool=self.be_mpool, min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23
-            )
-            conn_policy = POLICY_INFRASTRUCTURE
-            self.local_inout = Connection(
-                inbound_initializer=self.local_ch_in,
-                outbound_initializer=self.local_ch_out,
-                options=conn_options,
-                policy=conn_policy,
-            )
-            self.infra_in = Connection(inbound_initializer=self.be_inbound, options=conn_options, policy=conn_policy)
-
+            # TODO CPW: where does this comment go now?
             # Create a backdoor into sending messages to infra_in in case I need
             # to tell the thread using it to shutdown:
-            self.infra_in_bd = Connection(
-                outbound_initializer=self.be_inbound, options=conn_options, policy=conn_policy
-            )
 
             # Create a gateway channel for myself
             self.gw_ch = Channel(self.be_mpool, gw_cuid)
-
-            # Connect to frontend
-            be_outbound = Channel.attach(frontend_sdesc.decode(), mem_pool=self.be_mpool)
-
-            # There are three places where we can try to send messages to the frontend:
-            # 1) send_messages_to_overlaynet for normal infrastructure messages
-            # 2) send_log_msgs_to_overlaynet for logging infrastructure messages
-            # 3) within CriticalPopen in the case that local services abnormally terminates
-            # To keep everything consistent, we create three connections that all use
-            # the same be_outbound channel
-
-            self.infra_out = Connection(outbound_initializer=be_outbound, options=conn_options, policy=conn_policy)
-            self.infra_out.ghost = True
-
-            self.infra_logging_out = Connection(
-                outbound_initializer=be_outbound, options=conn_options, policy=conn_policy
-            )
-            self.infra_logging_out.ghost = True
-
-            self.infra_abnormalterm_out = Connection(
-                outbound_initializer=be_outbound, options=conn_options, policy=conn_policy
-            )
-            self.infra_abnormalterm_out.ghost = True
 
         except (ChannelError, DragonPoolError, DragonMemoryError) as init_err:
             log.fatal("could not create resources")
@@ -697,6 +637,23 @@ class LauncherBackEnd:
             encoded_ser_gw_str
         )
         register_gateways_from_env()
+        try:
+            self.infra_out = InfraQueue.attach(frontend_sdesc, mpool=self.be_mpool)
+            # Connect to frontend
+            # There are three places where we can try to send messages to the frontend:
+            # 1) send_messages_to_overlaynet for normal infrastructure messages
+            # 2) send_log_msgs_to_overlaynet for logging infrastructure messages
+            # 3) within CriticalPopen in the case that local services abnormally terminates
+            # To keep everything consistent, we create three connections that all use
+            # the same be_outbound channel
+
+            self.be_inbound = Channel(self.be_mpool, be_cuid)
+            self.infra_in = InfraQueue(main_channel=self.be_inbound, pool=self.be_mpool)
+            self.local_in_q = InfraQueue(main_channel=self.local_ch_in, pool=self.be_mpool)
+            self.local_out_q = InfraQueue(main_channel=self.local_ch_out, pool=self.be_mpool)
+        except (ChannelError, DragonPoolError, DragonMemoryError) as init_err:
+            log.fatal("could not create resources")
+            raise RuntimeError("infrastructure transport resource creation failed") from init_err
 
         # start my transport agent
         # Add my own host_id and ip_addr to frontend's
@@ -722,8 +679,8 @@ class LauncherBackEnd:
         try:
             self.tree_proc = start_overlay_network(
                 overlay_transport=self.overlay_transport,
-                ch_in_sdesc=B64(self.local_ch_out.serialize()),
-                ch_out_sdesc=B64(self.local_ch_in.serialize()),
+                ch_in_sdesc=self.local_out_q.serialize(),
+                ch_out_sdesc=self.local_in_q.serialize(),
                 log_sdesc=serialized_dragon_logger,
                 host_ids=host_ids,
                 ip_addrs=ip_addrs,
@@ -736,7 +693,7 @@ class LauncherBackEnd:
 
         # Wait on a message from the transport agent telling me it's good to go.
         log.info("Channel tree initializing....")
-        ping_back = dlutil.get_with_blocking(self.local_inout)
+        ping_back = dlutil.q_get_with_blocking(self.local_in_q)
         assert isinstance(ping_back, dmsg.OverlayPingBE)
         log.debug(f"comm tree initialized with {type(ping_back)} with pid {self.tree_proc.pid}")
 
@@ -744,13 +701,13 @@ class LauncherBackEnd:
 
         # Send BEIsUP msg to FE
         # Send my serialized descriptor and host_id to the frontend
-        be_ch_desc = str(B64(self.be_inbound.serialize()))
+        be_ch_desc = self.infra_in.serialize()
         be_up_msg = dmsg.BEIsUp(tag=dlutil.next_tag(), be_ch_desc=be_ch_desc, host_id=self.host_id)
-        self.infra_out.send(be_up_msg.serialize())
+        self.infra_out.put(be_up_msg)
         log.info(f"sent BEIsUp to the frontend, with host_id = {self.host_id}")
 
         # Receive my node_index from the frontend - FENodeIdxBE msg
-        fe_node_idx_msg = dlutil.get_with_blocking(self.infra_in)
+        fe_node_idx_msg = dlutil.q_get_with_blocking(self.infra_in)
         assert isinstance(fe_node_idx_msg, dmsg.FENodeIdxBE), "la_be node_index from fe expected"
         self._state = BackendState.OVERLAY_UP
 
@@ -776,7 +733,14 @@ class LauncherBackEnd:
         log.debug(f"Before sending TAUpdateNodes")
         update_msg = dmsg.TAUpdateNodes(tag=dlutil.next_tag(), nodes=list(fe_node_idx_msg.forward.values()))
         log.debug(f"sending TAUpdateNodes to overlay: {update_msg.uncompressed_serialize()}")
-        self.local_inout.send(update_msg.serialize())
+        self.local_out_q.put(update_msg)
+
+        # CPW: we have to wait for the TA to ack the update before we can move on, because we need to be sure the TA has the updated network info before we start trying to route messages through it. If we don't wait for this update there is a chance that the forwarding part of the tree won't be fully connected before we start trying to use it, which can cause messages to get lost and the system to hang.
+        ta_update_ack = dlutil.q_get_with_blocking(self.local_in_q)
+        assert isinstance(
+            ta_update_ack, dmsg.TAUpdateNodesResponse
+        ), "expected TAUpdateNodesResponse ack from overlay TA"
+        log.debug("recieved TAUpdateNodesResponse from overlay")
 
         # create a contiguous mapping of keys that came from net_config
         # If I'm a tree child of the frontend, I need to forward infrastructure messages to
@@ -795,10 +759,10 @@ class LauncherBackEnd:
                 tag=dlutil.next_tag(),
                 node_index=int(idx),
                 forward=fe_node_idx_msg.forward,
-                send_desc=self.be_inbound,
+                send_desc=self.infra_in.serialize(),
                 net_conf_key_mapping=fe_node_idx_msg.net_conf_key_mapping,
             )
-            conn.send(fe_node_idx.serialize())
+            conn.put(fe_node_idx)
 
         # This starts the "down the tree" router.
         log.debug("starting frontend monitor")
@@ -869,7 +833,7 @@ class LauncherBackEnd:
         else:
             _user, ip_addrs = _get_host_info(self.network_prefix)  # get ip_addrs without the port
 
-        be_node_idx_msg = dmsg.BENodeIdxSH(
+        be_node_idx_msg = dmsg.BENodeIdxLS(
             tag=dlutil.next_tag(),
             node_idx=self.node_idx,
             host_name=self.hostname,
@@ -881,25 +845,20 @@ class LauncherBackEnd:
 
         self.ls_stdin.send(be_node_idx_msg.serialize())
         log.info(
-            f"sent BENodeIdxSH(node_idx={self.node_idx}, net_conf_key={self.net_conf_key}) - m2.1 -- ip_addrs = {ip_addrs}"
+            f"sent BENodeIdxLS(node_idx={self.node_idx}, net_conf_key={self.net_conf_key}) - m2.1 -- ip_addrs = {ip_addrs}"
         )
 
-        # Wait for SHPingBE on the incoming Posix Message Queue. This tells us the
+        # Wait for LSPingBE on the incoming Posix Message Queue. This tells us the
         # infrastructure channels have been created. Then we know we can attach to them.
         sh_ping_be_msg = dlutil.get_with_blocking(self.ls_stdout)
-        assert isinstance(sh_ping_be_msg, dmsg.SHPingBE), "la_be ping from ls expected"
-        log.info("la_be recv SHPingBE - m3")
+        assert isinstance(sh_ping_be_msg, dmsg.LSPingBE), "la_be ping from ls expected"
+        log.info("la_be recv LSPingBE - m3")
 
         # switch to comms with local services over channels and proceed with bring up
-        self.ls_channel = Channel.attach(B64.from_str(sh_ping_be_msg.shep_cd).decode())
-        self.la_channel = Channel.attach(B64.from_str(sh_ping_be_msg.be_cd).decode())
-        self.ls_queue = Connection(
-            outbound_initializer=self.ls_channel, options=conn_options, policy=POLICY_INFRASTRUCTURE
-        )
-        self.la_queue = Connection(inbound_initializer=self.la_channel, policy=POLICY_INFRASTRUCTURE)
-        self.la_queue_bd = Connection(
-            outbound_initializer=self.la_channel, options=conn_options, policy=POLICY_INFRASTRUCTURE
-        )
+        self.ls_channel = None
+        self.ls_queue = InfraQueue.attach(sh_ping_be_msg.ls_cd)
+        self.la_queue = InfraQueue.attach(sh_ping_be_msg.be_cd)
+        self.la_queue_bd = self.la_queue
         log.info("la_be attached to ls created channels - a7")
 
         # Start the channel monitor thread
@@ -909,10 +868,10 @@ class LauncherBackEnd:
         )
         self.channel_monitor_thread.start()
 
-        # Now send the BEPingSH message to Local Services on its channel to confirm
+        # Now send the BEPingLS message to Local Services on its channel to confirm
         # that this code has switched over to using the infra channels.
-        self.ls_queue.send(dmsg.BEPingSH(tag=dlutil.next_tag()).serialize())
-        log.info("la_be sent BEPingSH - m4")
+        self.ls_queue.put(dmsg.BEPingLS(tag=dlutil.next_tag()))
+        log.info("la_be sent BEPingLS - m4")
 
         log.debug("Exiting backend startup...")
 
@@ -928,7 +887,7 @@ class LauncherBackEnd:
         # send msg from callback to parent
         while running:
             try:
-                fe_msg = dlutil.get_with_blocking(self.infra_in)
+                fe_msg = dlutil.q_get_with_blocking(self.infra_in)
                 if isinstance(fe_msg, dmsg.HaltOverlay):
                     running = False
                     break
@@ -978,13 +937,13 @@ class LauncherBackEnd:
                 # that to the frontend but then assume the frontend will no longer talk to us.
                 if isinstance(msg, dmsg.ExceptionlessAbort):
                     at_msg = dmsg.AbnormalTermination(tag=dlutil.next_tag(), host_id=self.host_id)
-                    self.infra_out.send(at_msg.serialize())
+                    self.infra_out.put(at_msg)
                     self._abnormally_terminating = True
                     self.to_overlaynet_log.info("forwarded AbnormalTermination to frontend via ExceptionlessAbort")
 
                 if isinstance(msg, dmsg.RebootRuntime):
                     at_msg = dmsg.AbnormalTermination(tag=dlutil.next_tag(), host_id=msg.h_uid)
-                    self.infra_out.send(at_msg.serialize())
+                    self.infra_out.put(at_msg)
                     self._abnormally_terminating = True
                     self.to_overlaynet_log.info(
                         f"forwarded AbnormalTermination with h_uids to ignore {at_msg.tag} to frontend via RebootRuntime"
@@ -993,9 +952,9 @@ class LauncherBackEnd:
                 # Do any specific to the message handling then forward it along
                 self.to_overlaynet_log.info(f"received {type(msg)}")
                 if type(msg) in LauncherBackEnd._DTBL:
-                    if isinstance(msg, dmsg.SHFwdOutput):
+                    if isinstance(msg, dmsg.LSFwdOutput):
                         self.to_overlaynet_log.debug(f"{msg}")
-                    self.infra_out.send(msg.serialize())
+                    self.infra_out.put(msg)
                     self.to_overlaynet_log.info(f"forwarded {type(msg)} to frontend")
 
             self.to_overlaynet_log.info("exiting thread routine")
@@ -1023,11 +982,11 @@ class LauncherBackEnd:
                 while logging_queue and not self._logging_shutdown.is_set():
                     try:
                         msg = logging_queue.get(timeout=None)
-                        log.debug('got log message of type %s', type(msg))
+                        log.debug("got log message of type %s", type(msg))
                         if isinstance(msg, dmsg.HaltLoggingInfra):
                             break
                         elif isinstance(msg, dmsg.CpLoggingMessage):
-                            self.infra_logging_out.send(msg.serialize())
+                            self.infra_out.put(msg)
                         else:
                             log.debug("unknown message of type %s on logging channel - discarding", type(msg))
                     except Exception as ex:
@@ -1049,7 +1008,7 @@ class LauncherBackEnd:
         (i.e. local services or global services)
 
         Args:
-            la_in (Connection): communication channel receiving messages
+            la_in (InfraQueue): communication channel receiving messages
             la_be_stdout (SRQueue): main queue of messages to process
         """
         log = logging.getLogger(dls.LA_BE).getChild("be_channel_monitor")
@@ -1057,7 +1016,7 @@ class LauncherBackEnd:
         while running:
             try:
                 try:
-                    msg = dlutil.get_with_blocking(la_in)
+                    msg = dlutil.q_get_with_blocking(la_in)
                 except Exception:
                     # Don't deliver abort if we're already in the middle of teardown.
                     if self._state < BackendState.TEARDOWN:
@@ -1074,19 +1033,19 @@ class LauncherBackEnd:
                 if isinstance(msg, dmsg.HaltOverlay):
                     break
 
-                if isinstance(msg, dmsg.SHChannelsUp):
+                if isinstance(msg, dmsg.LSChannelsUp):
                     self._state = BackendState.LS_UP
 
                 la_be_stdout.send(msg.serialize())
                 log.debug(f"be_channel_monitor - forwarded {type(msg)}")
-                if isinstance(msg, dmsg.SHHaltBE):
+                if isinstance(msg, dmsg.LSHaltBE):
                     log.info("setting logging for shutdown")
                     running = False
                     self._logging_shutdown.set()
 
                     log.info("detaching from dragon logging")
                     detach_from_dragon_handler(dls.LA_BE)
-                    self.logging_queue.put(dmsg.HaltLoggingInfra(tag=dlutil.next_tag()).serialize())
+                    self.logging_queue.put(dmsg.HaltLoggingInfra(tag=dlutil.next_tag()))
 
             except Exception as ex:
                 log.critical(f"Caught exception in be_channel_monitor thread: {ex}")
@@ -1128,7 +1087,7 @@ class LauncherBackEnd:
         :type msg: dragon.infrastructure.messages.InfraMsg
         """
         for conn in self.frontend_fwd_conns.values():
-            conn.send(msg.serialize())
+            conn.put(msg)
 
     @route(dmsg.GSProcessCreate, _DTBL)
     def handle_gs_process_create(self, msg: dmsg.GSProcessCreate):
@@ -1148,14 +1107,16 @@ class LauncherBackEnd:
             raise RuntimeError("Primary LA_BE received GSProcessCreate Request but gs_queue not established.")
 
         self.msg_log.info("Primary la_be received a GSProcess Create in the Launcher Backend and forwarded to GS.")
-        self.gs_queue.send(msg.serialize())
+        self.gs_queue.put(msg)
 
     @route(dmsg.GSProcessCreateResponse, _DTBL)
     def handle_gs_process_create_resp(self, msg: dmsg.GSProcessCreateResponse):
         pass
 
-    @route(dmsg.SHFwdOutput, _DTBL)
-    def handle_sh_fwd_output(self, msg: dmsg.SHFwdOutput):
+    @route(dmsg.LSFwdOutput, _DTBL)
+    def handle_sh_fwd_output(self, msg: dmsg.LSFwdOutput):
+        # Output forwarding is handled by the output monitoring threads, so the
+        # routed message only needs to be accepted and dropped here.
         pass
 
     @route(dmsg.GSHeadExit, _DTBL)
@@ -1177,45 +1138,45 @@ class LauncherBackEnd:
         # we may be in trouble, so guard against that
         self.msg_log.info("m4.1 primary la_be received GSTeardown")
         try:
-            self.gs_queue.send(msg.serialize())
+            self.gs_queue.put(msg)
             self._state = BackendState.TEARDOWN
-        except (AttributeError, ConnectionError):
+        except (AttributeError, ValueError):
             self.msg_log.info(
                 "Received a GSTeardown before backend fully up. Will work towards cleaning backend and exit"
             )
             self._abnormal_termination(msg)
 
-    @route(dmsg.SHHaltTA, _DTBL)
-    def handle_sh_halt_ta(self, msg: dmsg.SHHaltTA):
-        self.msg_log.info("m7.1 la_be received SHHaltTA")
+    @route(dmsg.LSHaltTA, _DTBL)
+    def handle_sh_halt_ta(self, msg: dmsg.LSHaltTA):
+        self.msg_log.info("m7.1 la_be received LSHaltTA")
         try:
             # Forward to leaves
             self.forward_to_leaves(msg)
 
             # Try forwarding ot local services
             if self._state >= BackendState.LS_UP:
-                self.ls_queue.send(msg.serialize())
-                self.msg_log.info("m7.2 la_be forwarded SHHaltTA to LS")
+                self.ls_queue.put(msg)
+                self.msg_log.info("m7.2 la_be forwarded LSHaltTA to LS")
                 if not self.is_primary:
                     self._state = BackendState.TEARDOWN
             else:
                 raise ConnectionError("Cannot communicate over LS channel reliably")
-        except (AttributeError, ConnectionError):
+        except (AttributeError, ConnectionError, ValueError):
             self.msg_log.info(
-                "Received a SHHaltTA before backend fully up. Will work towards cleaning backend and exit"
+                "Received a LSHaltTA before backend fully up. Will work towards cleaning backend and exit"
             )
             self._abnormal_termination(msg)
 
-    @route(dmsg.SHTeardown, _DTBL)
-    def handle_sh_teardown(self, msg: dmsg.SHTeardown):
+    @route(dmsg.LSTeardown, _DTBL)
+    def handle_sh_teardown(self, msg: dmsg.LSTeardown):
 
-        self.msg_log.info("m11.1 la_be received SHTeardown")
+        self.msg_log.info("m11.1 la_be received LSTeardown")
 
         self.forward_to_leaves(msg)
         self.msg_log.info("forward shteardown to backend leaves")
 
-        self.ls_queue.send(msg.serialize())
-        self.msg_log.info("m11.2 la_be forwarded SHTeardown to LS")
+        self.ls_queue.put(msg)
+        self.msg_log.info("m11.2 la_be forwarded LSTeardown to LS")
 
     @route(dmsg.BEHalted, _DTBL)
     def handle_be_halted(self, msg: dmsg.BEHalted):
@@ -1238,15 +1199,15 @@ class LauncherBackEnd:
     def handle_reboot_runtime(self, msg: dmsg.RebootRuntime):
         self.msg_log.info("la_be received dmsg.RebootRuntime")
 
-    @route(dmsg.SHProcessCreate, _DTBL)
-    def handle_sh_proc_crate(self, msg: dmsg.SHProcessCreate):
-        self.msg_log.info("In Transport Test Mode: Sending SHProcessCreate directly to local services.")
-        self.ls_queue.send(msg.serialize())
+    @route(dmsg.LSProcessCreate, _DTBL)
+    def handle_sh_proc_crate(self, msg: dmsg.LSProcessCreate):
+        self.msg_log.info("In Transport Test Mode: Sending LSProcessCreate directly to local services.")
+        self.ls_queue.put(msg)
 
-    @route(dmsg.SHChannelsUp, _DTBL)
-    def handle_sh_channels_up(self, msg: dmsg.SHChannelsUp):
-        self.to_overlaynet_log.info("la_be recv SHChannelsUp - m5.1")
-        self.to_overlaynet_log.info("la_be sent SHChannelsUp to OverlayNet be - m5.2")
+    @route(dmsg.LSChannelsUp, _DTBL)
+    def handle_sh_channels_up(self, msg: dmsg.LSChannelsUp):
+        self.to_overlaynet_log.info("la_be recv LSChannelsUp - m5.1")
+        self.to_overlaynet_log.info("la_be sent LSChannelsUp to OverlayNet be - m5.2")
 
     @route(dmsg.LAChannelsInfo, _DTBL)
     def handle_la_channels_info(self, msg: dmsg.LAChannelsInfo):
@@ -1254,20 +1215,14 @@ class LauncherBackEnd:
         # The LAChannelsInfo gave us the serialized descriptor of
         # global services channel, so now we can attach to that channel.
         if self.is_primary and (not self.transport_test_env):
-            self.gs_channel = Channel.attach(B64.from_str(msg.gs_cd).decode())
-            conn_options = ConnectionOptions(
-                default_pool=self.be_mpool, min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23
-            )
-            self.gs_queue = Connection(
-                outbound_initializer=self.gs_channel, options=conn_options, policy=POLICY_INFRASTRUCTURE
-            )
+            self.gs_queue = InfraQueue.attach(msg.gs_qd)
             self.msg_log.debug(f"Primary la_be created gs_queue: {self.gs_queue}")
 
         # Forward the message to my leaves
         self.forward_to_leaves(msg)
 
         # Forward the LAChannelsInfo Message to Local Services
-        self.ls_queue.send(msg.serialize())
+        self.ls_queue.put(msg)
         self.msg_log.info("la_be sent LAChannelsInfo to ls - m5.3")
 
     @route(dmsg.TAUp, _DTBL)
@@ -1292,14 +1247,18 @@ class LauncherBackEnd:
         self.to_overlaynet_log.info("m10.1 la_be received TAHalted")
         self.to_overlaynet_log.info("m10.2 la_be forwarded TAHalted to FE")
 
-    @route(dmsg.SHHaltBE, _DTBL)
-    def handle_sh_halt_be(self, msg: dmsg.SHHaltBE):
-        self.to_overlaynet_log.info("m12 la_be received SHHaltBE")
+    @route(dmsg.LSHaltBE, _DTBL)
+    def handle_sh_halt_be(self, msg: dmsg.LSHaltBE):
+        self.to_overlaynet_log.info("m12 la_be received LSHaltBE")
 
-    @route(dmsg.SHProcessExit, _DTBL)
-    def handle_sh_process_exit(self, msg: dmsg.SHProcessExit):
+    @route(dmsg.LSProcessExit, _DTBL)
+    def handle_sh_process_exit(self, msg: dmsg.LSProcessExit):
+        # The backend has no teardown work for a process exit; the message is
+        # routed here only so it is consumed rather than treated as unexpected.
         pass
 
-    @route(dmsg.SHProcessCreateResponse, _DTBL)
-    def handle_sh_proc_create_response(self, msg: dmsg.SHProcessCreateResponse):
+    @route(dmsg.LSProcessCreateResponse, _DTBL)
+    def handle_sh_proc_create_response(self, msg: dmsg.LSProcessCreateResponse):
+        # Global services owns the process create handshake, so the backend just
+        # consumes this response.
         pass

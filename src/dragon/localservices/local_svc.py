@@ -4,6 +4,7 @@ import io
 import json
 import logging
 import os
+import queue
 import subprocess
 import sys
 
@@ -16,15 +17,17 @@ import dragon.utils as dutils
 from ..infrastructure.node_desc import NodeDescriptor
 from ..transport import start_transport_agent
 
-from ..infrastructure import connection as dconn
 from ..infrastructure import facts as dfacts
 from ..infrastructure import messages as dmsg
 from ..infrastructure import parameters as dparms
 from ..infrastructure import util as dutil
 from ..dlogging.util import setup_BE_logging, DragonLoggingServices as dls
 from ..utils import B64, set_procname
+from ..infrastructure.queue import InfraQueue
 
 from .server import LocalServer, PopenProps, get_new_tag, ProcessProps, OutputConnector
+
+_LS_INPUT_STARTUP_EXPECTATION = "startup expectation on ls input"
 
 
 def maybe_start_gs(
@@ -62,7 +65,7 @@ def maybe_start_gs(
                 be_in=be_in,
                 puid=dfacts.GS_PUID,
                 hostname=hostname,
-                out_err=dmsg.SHFwdOutput.FDNum.STDOUT.value,
+                out_err=dmsg.LSFwdOutput.FDNum.STDOUT.value,
                 conn=None,
                 root_proc=True,
                 critical_proc=True,
@@ -71,7 +74,7 @@ def maybe_start_gs(
                 be_in=be_in,
                 puid=dfacts.GS_PUID,
                 hostname=hostname,
-                out_err=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                out_err=dmsg.LSFwdOutput.FDNum.STDERR.value,
                 conn=None,
                 root_proc=True,
                 critical_proc=True,
@@ -156,30 +159,30 @@ def mk_inf_resources(node_index):
         dparms.this_process.inf_pd = dutils.B64.bytes_to_str(inf_pool.serialize())
         dparms.this_process.default_pd = dutils.B64.bytes_to_str(def_pool.serialize())
 
-        shep_input_cuid = dfacts.shepherd_cuid_from_index(node_index)
-        shep_ch = dch.Channel(inf_pool, shep_input_cuid, None)
-        dparms.this_process.local_shep_cd = dutils.B64.bytes_to_str(shep_ch.serialize())
-        shep_input = dconn.Connection(inbound_initializer=shep_ch, policy=dparms.POLICY_INFRASTRUCTURE)
+        ls_input_cuid = dfacts.localservices_cuid_from_index(node_index)
+        ls_ch = dch.Channel(inf_pool, ls_input_cuid, None)
+        ls_input = InfraQueue(pool=inf_pool, main_channel=ls_ch)
+        dparms.this_process.local_ls_qd = ls_input.serialize()
 
         la_input_cuid = dfacts.launcher_cuid_from_index(node_index)
         la_input_ch = dch.Channel(inf_pool, la_input_cuid, None)
-        dparms.this_process.local_be_cd = dutils.B64.bytes_to_str(la_input_ch.serialize())
         dparms.this_process.be_cuid = dfacts.launcher_cuid_from_index(node_index)
-        la_input = dconn.Connection(outbound_initializer=la_input_ch, options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23), policy=dparms.POLICY_INFRASTRUCTURE)
+        la_input = InfraQueue(pool=inf_pool, main_channel=la_input_ch)
+        dparms.this_process.local_be_cd = la_input.serialize()
 
         ta_input_cuid = dfacts.transport_cuid_from_index(node_index)
         ta_input_ch = dch.Channel(inf_pool, ta_input_cuid, None)
-        ta_input_descr = ta_input_ch.serialize()
-        dparms.this_process.local_ta_cd = dutils.B64.bytes_to_str(ta_input_descr)
-        ta_input = dconn.Connection(outbound_initializer=ta_input_ch, options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23), policy=dparms.POLICY_INFRASTRUCTURE)
+        ta_input = InfraQueue(pool=inf_pool, main_channel=ta_input_ch)
+        ta_input_descr = ta_input.serialize()
+        dparms.this_process.local_ta_cd = ta_input_descr
 
-        start_channels = {shep_input_cuid: shep_ch, la_input_cuid: la_input_ch, ta_input_cuid: ta_input_ch}
+        start_channels = {ls_input_cuid: ls_ch, la_input_cuid: la_input_ch, ta_input_cuid: ta_input_ch}
 
         if 0 == node_index:
             gs_chan = dch.Channel(inf_pool, dfacts.GS_INPUT_CUID, None)
             start_channels[dfacts.GS_INPUT_CUID] = gs_chan
-            dparms.this_process.gs_cd = dutils.B64.bytes_to_str(gs_chan.serialize())
-            gs_input = dconn.Connection(outbound_initializer=gs_chan, options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23), policy=dparms.POLICY_INFRASTRUCTURE)
+            gs_input = InfraQueue(pool=inf_pool, main_channel=gs_chan)
+            dparms.this_process.gs_qd = gs_input.serialize()
         else:
             gs_input = None
 
@@ -193,10 +196,10 @@ def mk_inf_resources(node_index):
         raise RuntimeError("infrastructure resource creation failed") from init_err
 
     log.info("infrastructure resources constructed")
-    return start_pools, start_channels, shep_input, la_input, ta_input_descr, ta_input, gs_input
+    return start_pools, start_channels, ls_input, la_input, ta_input_descr, ta_input, gs_input
 
 
-def get_shepherd_msg_queue(stdin=None, stdout=None):
+def get_ls_msg_queue(stdin=None, stdout=None):
     if stdin is None:
         # detach() transfers the BufferedReader out of the TextIOWrapper so only
         # one object owns FD 0 (avoids EBADF double-close in Python 3.13).
@@ -204,18 +207,18 @@ def get_shepherd_msg_queue(stdin=None, stdout=None):
         # doesn't raise "underlying buffer has been detached".
         bin_stdin = sys.stdin.detach()
         sys.stdin = io.StringIO()
-        shep_stdin_msg = dutil.NewlineStreamWrapper(bin_stdin, write_intent=False, b64_encode_decode=True)
+        ls_stdin_msg = dutil.NewlineStreamWrapper(bin_stdin, write_intent=False, b64_encode_decode=True)
     else:
-        shep_stdin_msg = stdin
+        ls_stdin_msg = stdin
 
     if stdout is None:
         bin_stdout = sys.stdout.detach()
         sys.stdout = io.StringIO()
-        shep_stdout_msg = dutil.NewlineStreamWrapper(bin_stdout, write_intent=True, b64_encode_decode=True)
+        ls_stdout_msg = dutil.NewlineStreamWrapper(bin_stdout, write_intent=True, b64_encode_decode=True)
     else:
-        shep_stdout_msg = stdout
+        ls_stdout_msg = stdout
 
-    return shep_stdin_msg, shep_stdout_msg
+    return ls_stdin_msg, ls_stdout_msg
 
 
 def single(
@@ -238,11 +241,11 @@ def single(
     try:  # attempt to construct infrastructure objects and establish communications
         os.setpgid(0, 0)
 
-        shep_stdin_msg, shep_stdout_msg = get_shepherd_msg_queue(ls_stdin, ls_stdout)
+        ls_stdin_msg, ls_stdout_msg = get_ls_msg_queue(ls_stdin, ls_stdout)
 
-        msg = dmsg.parse(shep_stdin_msg.recv())
-        assert isinstance(msg, dmsg.BENodeIdxSH), "startup msg expected on stdin"
-        log.info("got BENodeIdxSH")
+        msg = dmsg.parse(ls_stdin_msg.recv())
+        assert isinstance(msg, dmsg.BENodeIdxLS), "startup msg expected on stdin"
+        log.info("got BENodeIdxLS")
         assert msg.node_idx == 0, "single node"
         node_index = msg.node_idx
         net_conf_key = msg.net_conf_key
@@ -255,40 +258,41 @@ def single(
 
         dparms.this_process.index = node_index
         os.environ.update(dparms.this_process.env())
-        be_ping = dmsg.SHPingBE(
+        be_ping = dmsg.LSPingBE(
             tag=get_new_tag(),
-            shep_cd=dparms.this_process.local_shep_cd,
+            ls_cd=dparms.this_process.local_ls_qd,
             be_cd=dparms.this_process.local_be_cd,
-            gs_cd=dparms.this_process.gs_cd,
+            gs_qd=dparms.this_process.gs_qd,
             default_pd=dparms.this_process.default_pd,
             inf_pd=dparms.this_process.inf_pd,
         )
-        shep_stdout_msg.send(be_ping.serialize())
-        log.info("wrote SHPingBE")
+        ls_stdout_msg.send(be_ping.serialize())
+        log.info("wrote LSPingBE")
 
-        msg = dmsg.parse(ls_input.recv())
-        assert isinstance(msg, dmsg.BEPingSH), "startup expectation on shep input"
-        log.info("got BEPingSH")
+        log.info("getting on ls_input")
+        msg = ls_input.get()
+        assert isinstance(msg, dmsg.BEPingLS), _LS_INPUT_STARTUP_EXPECTATION
+        log.info("got BEPingLS")
 
         ls_node_desc = NodeDescriptor.get_localservices_node_conf(
             host_name="localhost", name="localhost", ip_addrs=["127.0.0.1"], is_primary=True
         )
-        ch_up_msg = dmsg.SHChannelsUp(
-            tag=get_new_tag(), node_desc=ls_node_desc, gs_cd=dparms.this_process.gs_cd, net_conf_key=net_conf_key
+        ch_up_msg = dmsg.LSChannelsUp(
+            tag=get_new_tag(), node_desc=ls_node_desc, gs_qd=dparms.this_process.gs_qd, net_conf_key=net_conf_key
         )
 
-        la_input.send(ch_up_msg.serialize())
-        log.info("sent SHChannelsUp")
+        la_input.put(ch_up_msg)
+        log.info("sent LSChannelsUp")
         gs_proc = maybe_start_gs(gs_args, gs_env, hostname="localhost", be_in=la_input)
-        msg = dmsg.parse(ls_input.recv())
-        assert isinstance(msg, dmsg.GSPingSH), "startup expectation shep input"
-        log.info("got GSPingSH")
+        msg = ls_input.get()
+        assert isinstance(msg, dmsg.GSPingLS), _LS_INPUT_STARTUP_EXPECTATION
+        log.info("got GSPingLS")
     except (OSError, EOFError, json.JSONDecodeError, AssertionError, RuntimeError) as rte:
         log.fatal("startup failed")
         LocalServer.clean_pools(start_pools, log)
         raise RuntimeError("startup fatal error") from rte
 
-    gs_input.send(dmsg.SHPingGS(tag=get_new_tag(), node_sdesc=ls_node_desc.sdesc).serialize())
+    gs_input.put(dmsg.LSPingGS(tag=get_new_tag(), node_sdesc=ls_node_desc.sdesc))
 
     server = LocalServer(channels=start_channels, pools=start_pools, hostname="localhost")
 
@@ -304,9 +308,9 @@ def single(
         raise
 
     try:
-        msg = dmsg.parse(shep_stdin_msg.recv())
+        msg = dmsg.parse(ls_stdin_msg.recv())
         assert isinstance(msg, dmsg.BEHalted)
-        shep_stdout_msg.send(dmsg.SHHalted(tag=get_new_tag()).serialize())
+        ls_stdout_msg.send(dmsg.LSHalted(tag=get_new_tag()).serialize())
     except (OSError, AssertionError, EOFError, json.JSONDecodeError) as tde:
         log.fatal("teardown sequence error")
         raise RuntimeError("teardown") from tde
@@ -345,10 +349,10 @@ def multinode(
     try:  # attempt to construct infrastructure objects and establish communications
         os.setpgid(0, 0)
 
-        ls_stdin_queue, ls_stdout_queue = get_shepherd_msg_queue(ls_stdin, ls_stdout)
+        ls_stdin_queue, ls_stdout_queue = get_ls_msg_queue(ls_stdin, ls_stdout)
 
         msg = dmsg.parse(ls_stdin_queue.recv())
-        assert isinstance(msg, dmsg.BENodeIdxSH), "startup msg expected on stdin"
+        assert isinstance(msg, dmsg.BENodeIdxLS), "startup msg expected on stdin"
         node_index = msg.node_idx
         net_conf_key = msg.net_conf_key
         hostname = msg.host_name
@@ -356,7 +360,7 @@ def multinode(
         is_primary = msg.primary
         logger_sdesc = msg.logger_sdesc
         log.info(
-            "got BENodeIdxSH (id=%s, ips=%s, host=%s, primary=%s) - m2.1" % (node_index, ip_addrs, hostname, is_primary)
+            "got BENodeIdxLS (id=%s, ips=%s, host=%s, primary=%s) - m2.1" % (node_index, ip_addrs, hostname, is_primary)
         )
 
         # Add the dragon logging handler to our already existing log
@@ -374,42 +378,42 @@ def multinode(
         os.environ[dfacts.DRAGON_LOGGER_SDESC] = str(logger_sdesc)
 
         if is_primary:
-            gs_cd = dparms.this_process.gs_cd
+            gs_qd = dparms.this_process.gs_qd
         else:
-            gs_cd = None
+            gs_qd = None
 
-        be_ping = dmsg.SHPingBE(
+        be_ping = dmsg.LSPingBE(
             tag=get_new_tag(),
-            shep_cd=dparms.this_process.local_shep_cd,
+            ls_cd=dparms.this_process.local_ls_qd,
             be_cd=dparms.this_process.local_be_cd,
-            gs_cd=gs_cd,
+            gs_qd=gs_qd,
             default_pd=dparms.this_process.default_pd,
             inf_pd=dparms.this_process.inf_pd,
         )
         ls_stdout_queue.send(be_ping.serialize())
-        log.info("wrote SHPingBE")
+        log.info("wrote LSPingBE")
 
-        msg = dmsg.parse(ls_input.recv())
-        assert isinstance(msg, dmsg.BEPingSH), "startup expectation on shep input"
-        log.info("got BEPingSH")
+        msg = ls_input.get()
+        assert isinstance(msg, dmsg.BEPingLS), _LS_INPUT_STARTUP_EXPECTATION
+        log.info("got BEPingLS")
 
         # Create a node descriptor for this node I'm running on
         ls_node_desc = NodeDescriptor.get_localservices_node_conf(
             host_name=hostname, name=hostname, ip_addrs=ip_addrs, is_primary=is_primary
         )
-        ch_up_msg = dmsg.SHChannelsUp(
-            tag=get_new_tag(), node_desc=ls_node_desc, gs_cd=gs_cd, idx=node_index, net_conf_key=net_conf_key
+        ch_up_msg = dmsg.LSChannelsUp(
+            tag=get_new_tag(), node_desc=ls_node_desc, gs_qd=gs_qd, idx=node_index, net_conf_key=net_conf_key
         )
 
-        la_input.send(ch_up_msg.serialize())
-        log.info("sent SHChannelsUp")
+        la_input.put(ch_up_msg)
+        log.info("sent LSChannelsUp")
 
         # Recv LAChannelsInfo Broadcast
-        la_channels_info = dmsg.parse(ls_input.recv())
+        la_channels_info = ls_input.get()
         assert isinstance(la_channels_info, dmsg.LAChannelsInfo), "expected LAChannelsInfo"
         log.info("node index %s received all channels info" % node_index)
         log.debug("la_channels.nodes_desc: %s" % la_channels_info.nodes_desc)
-        log.debug("la_channels.gs_cd: %s" % la_channels_info.gs_cd)
+        log.debug("la_channels.gs_qd: %s" % la_channels_info.gs_qd)
 
         # Work out transport agent launch arguments:
         ta_args = ["%s" % la_channels_info.transport]
@@ -440,7 +444,7 @@ def multinode(
 
         # Here we register the gateway channels
         # created by this process as environment
-        # variables. This is to enable the shepherd
+        # variables. This is to enable the local services
         # (local services) once the transport service
         # is started, which happens next. Order is
         # not important here. The gateways can be
@@ -452,7 +456,7 @@ def multinode(
         # Start TA (telling it its node ID by appending to args) and send LAChannelsInfo
         log.info("standing up ta")
         try:
-            ta = start_transport_agent(node_index, B64(ta_input_descr), logger_sdesc, args=ta_args, env=ta_env)
+            ta = start_transport_agent(node_index, ta_input_descr, logger_sdesc, args=ta_args, env=ta_env)
             # Cast the Popen instance returned by start_transport_agent() to
             # PopenProps mainly for consistency, though it doesn't appear to
             # matter since the TA process isn't used elsewhere.
@@ -477,21 +481,21 @@ def multinode(
             raise RuntimeError("transport agent launch failed on node %s" % node_index) from e
 
         # Send LAChannelsInfo to TA
-        ta_input.send(la_channels_info.serialize())
+        ta_input.put(la_channels_info)
 
         # Confirmation TA is up. Use 10 seconds since this only requires node-local work,
         # ie: no communication is occurring unless something changes in the future.
         # If TA isn't up in 10 seconds, assume things have gone awry, check stderr
         # and log any error messages to the user
-        if ls_input.poll(timeout=10):
-            ta_ping = dmsg.parse(ls_input.recv())
-        else:
+        try:
+            ta_ping = ls_input.get(timeout=10)
+        except queue.Empty:
             _, ta_stderr = ta.communicate()
             error_str = f"Unable to bring up Dragon transport agent: {ta_stderr.decode()}"
-            la_input.send(dmsg.AbnormalTermination(tag=get_new_tag(), err_info=error_str).serialize())
+            la_input.put(dmsg.AbnormalTermination(tag=get_new_tag(), err_info=error_str))
             raise RuntimeError(error_str)
-        assert isinstance(ta_ping, dmsg.TAPingSH), "ls did not receive ping from TA)"
-        log.info("ls received TAPingSH - m7")
+        assert isinstance(ta_ping, dmsg.TAPingLS), "ls did not receive ping from TA)"
+        log.info("ls received TAPingLS - m7")
         ch_list = []
         if transport_test_env:
             first_cuid = dfacts.FIRST_CUID + node_index * 2
@@ -510,7 +514,7 @@ def multinode(
                 ch3_ser = B64(ch3.serialize())
                 ch_list.append(str(ch3_ser))
 
-        la_input.send(dmsg.TAUp(tag=get_new_tag(), idx=node_index, test_channels=ch_list).serialize())
+        la_input.put(dmsg.TAUp(tag=get_new_tag(), idx=node_index, test_channels=ch_list))
         log.info("ls send TAUp to la_be - m8.1")
 
         # Init these here so if in transport test mode, they have a value even though GS will not
@@ -534,30 +538,29 @@ def multinode(
                 gs_stdin_send.send(la_channels_info.serialize())
                 log.info("transmitted la_channels_info to gs")
 
-            gs_ch = la_channels_info.gs_cd
-            gs_in_ch = dch.Channel.attach(dutils.B64.str_to_bytes(gs_ch))
+            gs_ch = la_channels_info.gs_qd
             log.info("ls attached to gs channel")
-            gs_in_wh = dconn.Connection(outbound_initializer=gs_in_ch, options=dconn.ConnectionOptions(min_block_size=2**21, large_block_size=2**22, huge_block_size=2**23), policy=dparms.POLICY_INFRASTRUCTURE)
+            gs_in_wh = InfraQueue.attach(gs_ch)
 
             # Do a timeout on this recv. Just a few seconds if primary. Longer if we're getting remote comms from GS
             # If it fails, check that it didn't fall over on instantiation
             gs_timeout = dfacts.REMOTE_LAUNCH_TIMEOUT
             if is_primary:
                 gs_timeout = dfacts.LOCAL_LAUNCH_TIMEOUT
-            if ls_input.poll(timeout=gs_timeout):
-                gs_ping_ls = dmsg.parse(ls_input.recv())
-            else:
+            try:
+                gs_ping_ls = ls_input.get(timeout=gs_timeout)
+            except queue.Empty:
                 _, gs_stderr = gs.communicate()
                 error_str = f"Unable to bring up Dragon global services: {gs_stderr.decode()}"
-                la_input.send(dmsg.AbnormalTermination(tag=get_new_tag(), err_info=error_str).serialize())
+                la_input.put(dmsg.AbnormalTermination(tag=get_new_tag(), err_info=error_str))
                 raise RuntimeError(error_str)
-            if not isinstance(gs_ping_ls, dmsg.GSPingSH):
-                assert False, f"ls expected GSPingSH, received {type(gs_ping_ls)}"
-            log.info("ls received GSPingSH from gs - m10")
+            if not isinstance(gs_ping_ls, dmsg.GSPingLS):
+                assert False, f"ls expected GSPingLS, received {type(gs_ping_ls)}"
+            log.info("ls received GSPingLS from gs - m10")
 
             # Send response to GS
-            gs_in_wh.send(dmsg.SHPingGS(tag=get_new_tag(), idx=node_index, node_sdesc=ls_node_desc.sdesc).serialize())
-            log.info("ls sent SHPingGS - m11")
+            gs_in_wh.put(dmsg.LSPingGS(tag=get_new_tag(), idx=node_index, node_sdesc=ls_node_desc.sdesc))
+            log.info("ls sent LSPingGS - m11")
     except (OSError, EOFError, json.JSONDecodeError, AssertionError, RuntimeError) as rte:
         log.fatal("startup failed")
         LocalServer.clean_pools(start_pools, log)

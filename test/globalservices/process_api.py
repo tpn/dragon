@@ -22,11 +22,11 @@ import dragon.globalservices.server as dserver
 import dragon.infrastructure.facts as dfacts
 import dragon.dlogging.util as dlog
 import dragon.infrastructure.messages as dmsg
-import dragon.infrastructure.connection as dconn
 import dragon.infrastructure.parameters as dparm
 from dragon.infrastructure.node_desc import NodeDescriptor
 import support.util as tsu
 from dragon.utils import B64
+from dragon.infrastructure.queue import InfraQueue
 
 
 def bringup_channels(gs_stdout, env_updates, channel_overrides, logname=""):
@@ -36,22 +36,30 @@ def bringup_channels(gs_stdout, env_updates, channel_overrides, logname=""):
 
     dparm.this_process = dparm.LaunchParameters.from_env(env_updates)
 
+    # Attach InfraQueue handles directly from the serialized descriptors stored in the
+    # launch parameters.  startup.single_connect_to_default_channels applies an
+    # extra B64.str_to_bytes decode before calling Queue.attach, which is
+    # incompatible with the Queue serialization format; bypass it by passing
+    # the already-attached queues as test overrides.
+    gs_input_q = InfraQueue.attach(dparm.this_process.gs_qd)
+    shep_input_q = InfraQueue.attach(dparm.this_process.local_ls_qd)
+    bela_input_q = InfraQueue.attach(dparm.this_process.local_be_cd)
+
     # reconstitute overrides here.
     test_connections = {}
-    for uid, stuff in channel_overrides.items():
-        _, ser_chan, reading = stuff
-
-        chan = dch.Channel.attach(ser_chan)
-
-        if reading:
-            test_connections[uid] = dconn.Connection(inbound_initializer=chan)
-        else:
-            test_connections[uid] = dconn.Connection(outbound_initializer=chan)
+    for uid, ser_queue in channel_overrides.items():
+        test_connections[uid] = InfraQueue.attach(ser_queue)
 
     the_ctx = dserver.GlobalContext()
 
     try:
-        the_ctx.run_startup(mode=the_ctx.LaunchModes.TEST_STANDALONE_SINGLE, test_gs_stdout=gs_stdout)
+        the_ctx.run_startup(
+            mode=the_ctx.LaunchModes.TEST_STANDALONE_SINGLE,
+            test_gs_stdout=gs_stdout,
+            test_gs_input=gs_input_q,
+            test_ls_inputs=[shep_input_q],
+            test_bela_input=bela_input_q,
+        )
 
         the_ctx.run_global_server(
             mode=the_ctx.LaunchModes.TEST_STANDALONE_SINGLE,
@@ -83,36 +91,35 @@ class GSProcessBaseClass(unittest.TestCase):
         self.mpool = dmm.MemoryPool(self.pool_size, self.pool_name, self.pool_uid, self.pool_prealloc_blocks)
         self.some_parms.inf_pd = B64.bytes_to_str(self.mpool.serialize())
 
-        def mk_handles(cuid):
+        def mk_dqueue_handles(cuid):
             chan = dch.Channel(self.mpool, cuid)
-            rh = dconn.Connection(inbound_initializer=chan)
-            wh = dconn.Connection(outbound_initializer=chan)
-            envser = B64.bytes_to_str(chan.serialize())
-            return chan, rh, wh, envser
+            queue = InfraQueue(pool=self.mpool, main_channel=chan)
+            envser = queue.serialize()
+            return chan, queue, queue, envser
 
-        handles = mk_handles(dfacts.GS_INPUT_CUID)
-        self.gs_input_chan, self.gs_input_rh, self.gs_input_wh, self.some_parms.gs_cd = handles
+        handles = mk_dqueue_handles(dfacts.GS_INPUT_CUID)
+        self.gs_input_chan, self.gs_input_rh, self.gs_input_wh, self.some_parms.gs_qd = handles
 
-        handles = mk_handles(dfacts.BASE_BE_CUID)
+        handles = mk_dqueue_handles(dfacts.BASE_BE_CUID)
         self.bela_input_chan, self.bela_input_rh, self.bela_input_wh, self.some_parms.local_be_cd = handles
 
-        handles = mk_handles(dfacts.BASE_SHEP_CUID)
-        self.shep_input_chan, self.shep_input_rh, self.shep_input_wh, self.some_parms.local_shep_cd = handles
+        handles = mk_dqueue_handles(dfacts.BASE_LS_CUID)
+        self.shep_input_chan, self.shep_input_rh, self.shep_input_wh, self.some_parms.local_ls_qd = handles
 
         self.gs_return_cuid = 17
-        handles = mk_handles(self.gs_return_cuid)
+        handles = mk_dqueue_handles(self.gs_return_cuid)
         (
             self.proc_gs_return_chan,
             self.proc_gs_return_rh,
             self.proc_gs_return_wh,
-            self.some_parms.gs_ret_cd,
+            self.some_parms.gs_ret_qd,
         ) = handles
 
         dapi.test_connection_override(
             test_gs_input=self.gs_input_wh,
             test_gs_return=self.proc_gs_return_rh,
             test_gs_return_cuid=self.gs_return_cuid,
-            test_shep_input=self.shep_input_wh,
+            test_ls_input=self.shep_input_wh,
         )
 
         self.tag = 0
@@ -155,9 +162,7 @@ class GSProcessBaseClass(unittest.TestCase):
     def _start_dut(self):
         test_name = self.__class__.__name__ + "_" + inspect.stack()[1][0].f_code.co_name
 
-        reconst_gs_return_wh = (self.mpool.serialize(), self.proc_gs_return_chan.serialize(), False)
-
-        test_overrides = {self.gs_return_cuid: reconst_gs_return_wh}
+        test_overrides = {self.gs_return_cuid: self.proc_gs_return_wh.serialize()}
 
         the_env_wanted = self.some_parms.env()
 
@@ -170,14 +175,14 @@ class GSProcessBaseClass(unittest.TestCase):
 
         self.dut.start()
 
-        tsu.get_and_check_type(self.shep_input_rh, dmsg.GSPingSH)
+        tsu.get_and_check_type(self.shep_input_rh, dmsg.GSPingLS)
 
-        self.gs_input_wh.send(dmsg.SHPingGS(tag=0, node_sdesc=self.node_sdesc).serialize())
+        self.gs_input_wh.put(dmsg.LSPingGS(tag=0, node_sdesc=self.node_sdesc))
 
         tsu.get_and_check_type(self.bela_input_rh, dmsg.GSIsUp)
 
     def _teardown_dut(self):
-        self.gs_input_wh.send(dmsg.GSTeardown(tag=self.next_tag()).serialize())
+        self.gs_input_wh.put(dmsg.GSTeardown(tag=self.next_tag()))
 
         tsu.get_and_check_type(self.gs_stdout_rh, dmsg.GSHalted)
 
@@ -193,17 +198,17 @@ class GSProcessBaseClass(unittest.TestCase):
             head_proc=True,
         )
 
-        self.gs_input_wh.send(create_msg.serialize())
+        self.gs_input_wh.put(create_msg)
 
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHProcessCreate)
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSProcessCreate)
         self.assertEqual(shep_msg.exe, create_msg.exe)
         self.assertEqual(shep_msg.args, create_msg.args)
 
-        shep_reply_msg = dmsg.SHProcessCreateResponse(
-            tag=0, ref=shep_msg.tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+        shep_reply_msg = dmsg.LSProcessCreateResponse(
+            tag=0, ref=shep_msg.tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_reply_msg = tsu.get_and_check_type(self.bela_input_rh, dmsg.GSProcessCreateResponse)
         self.assertEqual(create_reply_msg.ref, create_msg.tag, "tag-ref mismatch")
@@ -216,9 +221,9 @@ class GSProcessBaseClass(unittest.TestCase):
         dparm.this_process.my_puid = self.head_puid
 
     def _kill_head(self):
-        death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=self.head_puid)
+        death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=self.head_puid)
 
-        self.gs_input_wh.send(death_msg.serialize())
+        self.gs_input_wh.put(death_msg)
 
         tsu.get_and_check_type(self.bela_input_rh, dmsg.GSHeadExit)
 
@@ -231,12 +236,12 @@ class GSProcessBaseClass(unittest.TestCase):
         kill_thread = threading.Thread(target=kill_wrap, args=(identifier, kill_result))
         kill_thread.start()
 
-        sh_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHProcessKill)
-        sh_kill_reply = dmsg.SHProcessKillResponse(
-            tag=self.next_tag(), ref=sh_kill_msg.tag, err=dmsg.SHProcessKillResponse.Errors.SUCCESS
+        sh_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSProcessKill)
+        sh_kill_reply = dmsg.LSProcessKillResponse(
+            tag=self.next_tag(), ref=sh_kill_msg.tag, err=dmsg.LSProcessKillResponse.Errors.SUCCESS
         )
 
-        self.gs_input_wh.send(sh_kill_reply.serialize())
+        self.gs_input_wh.put(sh_kill_reply)
 
         kill_thread.join()
         return kill_result[0]
@@ -254,13 +259,13 @@ class GSProcessBaseClass(unittest.TestCase):
         )
         create_thread.start()
 
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHProcessCreate)
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSProcessCreate)
 
-        shep_reply_msg = dmsg.SHProcessCreateResponse(
-            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+        shep_reply_msg = dmsg.LSProcessCreateResponse(
+            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_thread.join()
 
@@ -277,17 +282,17 @@ class GSProcessBaseClass(unittest.TestCase):
         create_result = []
         create_thread = threading.Thread(target=create_wrap, args=(fake_pool_size, fake_pool_name, create_result))
         create_thread.start()
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHPoolCreate)
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSPoolCreate)
 
         dummy_sdesc = B64.bytes_to_str("xxxTESTDUMMYxxx".encode())
-        shep_reply_msg = dmsg.SHPoolCreateResponse(
+        shep_reply_msg = dmsg.LSPoolCreateResponse(
             tag=self.next_tag(),
             ref=shep_msg.tag,
-            err=dmsg.SHPoolCreateResponse.Errors.SUCCESS,
+            err=dmsg.LSPoolCreateResponse.Errors.SUCCESS,
             desc=dummy_sdesc,
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_thread.join()
 
@@ -305,16 +310,16 @@ class GSProcessBaseClass(unittest.TestCase):
         create_result = []
         create_thread = threading.Thread(target=create_wrap, args=(m_uid, fake_channel_name, create_result))
         create_thread.start()
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHChannelCreate)
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSChannelCreate)
         dummy_sdesc = B64.bytes_to_str("xxxTESTDUMMYxxx".encode())
-        shep_reply_msg = dmsg.SHChannelCreateResponse(
+        shep_reply_msg = dmsg.LSChannelCreateResponse(
             tag=self.next_tag(),
             ref=shep_msg.tag,
-            err=dmsg.SHChannelCreateResponse.Errors.SUCCESS,
+            err=dmsg.LSChannelCreateResponse.Errors.SUCCESS,
             desc=dummy_sdesc,
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_thread.join()
 
@@ -346,7 +351,7 @@ class SingleProcAPIChannels(GSProcessBaseClass):
         self.assertEqual(descr.name, "bob")
 
         dump_msg = dmsg.GSDumpState(tag=self.next_tag(), filename="dump_file")
-        self.gs_input_wh.send(dump_msg.serialize())
+        self.gs_input_wh.put(dump_msg)
 
     def test_query_by_name(self):
         proc_name = "bob"
@@ -367,8 +372,8 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         first_live_children = mydesc.live_children
 
-        bob_dies = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=bobdesc.p_uid)
-        self.gs_input_wh.send(bob_dies.serialize())
+        bob_dies = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=bobdesc.p_uid)
+        self.gs_input_wh.put(bob_dies)
 
         mydesc_later = dproc.query(self.head_puid)
 
@@ -399,9 +404,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
         join_thread = threading.Thread(target=join_wrap, args=(proc_name, join_result))
         join_thread.start()
 
-        sh_kill_reply = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=desc.p_uid, exit_code=test_exit_code)
+        sh_kill_reply = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=desc.p_uid, exit_code=test_exit_code)
 
-        self.gs_input_wh.send(sh_kill_reply.serialize())
+        self.gs_input_wh.put(sh_kill_reply)
         join_thread.join()
         self.assertEqual(join_result[0], test_exit_code)
 
@@ -449,11 +454,11 @@ class SingleProcAPIChannels(GSProcessBaseClass):
         destroy_result = []
         destroy_thread = threading.Thread(target=destroy_wrap, args=(self.pool_m_uid, destroy_result))
         destroy_thread.start()
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHPoolDestroy)
-        shep_reply_msg = dmsg.SHPoolDestroyResponse(
-            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.SHPoolDestroyResponse.Errors.SUCCESS
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSPoolDestroy)
+        shep_reply_msg = dmsg.LSPoolDestroyResponse(
+            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.LSPoolDestroyResponse.Errors.SUCCESS
         )
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
         destroy_thread.join()
 
         self.assertEqual(destroy_result, [])
@@ -496,11 +501,11 @@ class SingleProcAPIChannels(GSProcessBaseClass):
         destroy_result = []
         destroy_thread = threading.Thread(target=destroy_wrap, args=(the_channel_name, destroy_result))
         destroy_thread.start()
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHChannelDestroy)
-        shep_reply_msg = dmsg.SHChannelDestroyResponse(
-            tag=178343, ref=shep_msg.tag, err=dmsg.SHChannelDestroyResponse.Errors.SUCCESS
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSChannelDestroy)
+        shep_reply_msg = dmsg.LSChannelDestroyResponse(
+            tag=178343, ref=shep_msg.tag, err=dmsg.LSChannelDestroyResponse.Errors.SUCCESS
         )
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
         destroy_thread.join()
 
         self.assertEqual(destroy_result, [])
@@ -584,8 +589,8 @@ class SingleProcAPIChannels(GSProcessBaseClass):
         join_thread = threading.Thread(target=join_wrap, args=([desc_first.p_uid, desc_sec.p_uid], join_result))
         join_thread.start()
 
-        sh_kill_reply = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=the_one_exiting, exit_code=test_exit_code)
-        self.gs_input_wh.send(sh_kill_reply.serialize())
+        sh_kill_reply = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=the_one_exiting, exit_code=test_exit_code)
+        self.gs_input_wh.put(sh_kill_reply)
 
         join_thread.join()
 
@@ -619,9 +624,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         def exit_wrap(tag, p_uid, exit_code, handler, sleep_time):
             time.sleep(sleep_time)
-            sh_kill_reply = dmsg.SHProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
+            sh_kill_reply = dmsg.LSProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
             try:
-                handler.send(sh_kill_reply.serialize())
+                handler.put(sh_kill_reply)
             except ConnectionError as ex:
                 # If it had this error, it is because things are shutting down. Ignore it.
                 pass
@@ -713,9 +718,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         def exit_wrap(tag, p_uid, exit_code, handler, sleep_time):
             time.sleep(sleep_time)
-            sh_kill_reply = dmsg.SHProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
+            sh_kill_reply = dmsg.LSProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
             try:
-                handler.send(sh_kill_reply.serialize())
+                handler.put(sh_kill_reply)
             except ConnectionError as ex:
                 # If it had this error, it is because things are shutting down. Ignore it.
                 pass
@@ -787,9 +792,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         def exit_wrap(tag, p_uid, exit_code, handler, sleep_time):
             time.sleep(sleep_time)
-            sh_kill_reply = dmsg.SHProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
+            sh_kill_reply = dmsg.LSProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
             try:
-                handler.send(sh_kill_reply.serialize())
+                handler.put(sh_kill_reply)
             except ConnectionError as ex:
                 # If it had this error, it is because things are shutting down. Ignore it.
                 pass
@@ -846,9 +851,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         def exit_wrap(tag, p_uid, exit_code, handler, sleep_time):
             time.sleep(sleep_time)
-            sh_kill_reply = dmsg.SHProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
+            sh_kill_reply = dmsg.LSProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
             try:
-                handler.send(sh_kill_reply.serialize())
+                handler.put(sh_kill_reply)
             except ConnectionError as ex:
                 # If it had this error, it is because things are shutting down. Ignore it.
                 pass
@@ -895,9 +900,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         def exit_wrap(tag, p_uid, exit_code, handler, sleep_time):
             time.sleep(sleep_time)
-            sh_kill_reply = dmsg.SHProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
+            sh_kill_reply = dmsg.LSProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
             try:
-                handler.send(sh_kill_reply.serialize())
+                handler.put(sh_kill_reply)
             except ConnectionError as ex:
                 # If it had this error, it is because things are shutting down. Ignore it.
                 pass
@@ -961,9 +966,9 @@ class SingleProcAPIChannels(GSProcessBaseClass):
 
         def exit_wrap(tag, p_uid, exit_code, handler, sleep_time):
             time.sleep(sleep_time)
-            sh_kill_reply = dmsg.SHProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
+            sh_kill_reply = dmsg.LSProcessExit(tag=tag, p_uid=p_uid, exit_code=exit_code)
             try:
-                handler.send(sh_kill_reply.serialize())
+                handler.put(sh_kill_reply)
             except ConnectionError as ex:
                 # If it had this error, it is because things are shutting down. Ignore it.
                 pass

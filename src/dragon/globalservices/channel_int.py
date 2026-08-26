@@ -1,7 +1,7 @@
 """Channel related objects internal to Global Services.
 
 This file includes the ChannelContext object, and code that
-talks to a shepherd to manipulate channel life cycle.
+talks to a local services to manipulate channel life cycle.
 """
 
 import dragon.infrastructure.channel_desc as channel_desc
@@ -20,15 +20,15 @@ class ChannelContext:
     """Everything to do with a single channel in global services
 
     This class includes the code that does the lifecycle of the
-    channel to the shepherd hosting that channel - sending and receiving
-    shepherd command messages.
+    channel to the local services hosting that channel - sending and receiving
+    local services command messages.
     """
 
-    def __init__(self, server, request, reply_channel, c_uid, node):
+    def __init__(self, server, request, reply_queue, c_uid, node):
         self.server = server
         self.request = request
         self.destroy_request = None
-        self.reply_channel = reply_channel  # TODO: really is a Connection, should change var name
+        self.reply_queue = reply_queue  # TODO: really is a InfraQueue, should change var name
         self.attached_connection = None
         self.is_reading = False
         self.is_refcounted = self.request.options.ref_count
@@ -48,8 +48,8 @@ class ChannelContext:
     def descriptor(self):
         return self._descriptor
 
-    def _mk_sh_channel_create(self, the_tag):
-        self.shchannelcreate_msg = dmsg.SHChannelCreate(
+    def _mk_ls_channel_create(self, the_tag):
+        self.lschannelcreate_msg = dmsg.LSChannelCreate(
             tag=the_tag,
             p_uid=dfacts.GS_PUID,
             r_c_uid=dfacts.GS_INPUT_CUID,
@@ -57,17 +57,17 @@ class ChannelContext:
             c_uid=self.descriptor.c_uid,
             options=self.request.options.local_opts,
         )
-        return self.shchannelcreate_msg
+        return self.lschannelcreate_msg
 
-    def mk_sh_channel_destroy(self, the_tag):
-        return dmsg.SHChannelDestroy(
+    def mk_ls_channel_destroy(self, the_tag):
+        return dmsg.LSChannelDestroy(
             tag=the_tag, p_uid=dfacts.GS_PUID, r_c_uid=dfacts.GS_INPUT_CUID, c_uid=self.descriptor.c_uid
         )
 
     @classmethod
-    def construct(cls, server, msg, reply_channel, node_override=None, send_msg=True):
+    def construct(cls, server, msg, reply_queue, node_override=None, send_msg=True):
         """Constructs a new channel context and sends out a message
-        to a shepherd to create the channel.
+        to a local services to create the channel.
 
         :return: a tuple:
             First element True if construction message issued, False otherwise
@@ -86,7 +86,7 @@ class ChannelContext:
                         err=dmsg.GSChannelCreateResponse.Errors.ALREADY,
                         desc=existing_ctx.descriptor,
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                 return False, None, None
 
             try:
@@ -106,7 +106,7 @@ class ChannelContext:
                     rm = dmsg.GSChannelCreateResponse(
                         tag=server.tag_inc(), ref=msg.tag, err=dmsg.GSChannelCreateResponse.Errors.FAIL, err_info=errmsg
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                 return False, None, None
 
             # check if the m_uid is ok
@@ -117,7 +117,7 @@ class ChannelContext:
                     rm = dmsg.GSChannelCreateResponse(
                         tag=server.tag_inc(), ref=msg.tag, err=dmsg.GSChannelCreateResponse.Errors.FAIL, err_info=errmsg
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                 return False, None, None
 
             this_cuid, auto_name = server.new_cuid_and_default_name()
@@ -127,17 +127,17 @@ class ChannelContext:
 
             outbound_tag = server.tag_inc()
 
-            context = cls(server, msg, reply_channel, this_cuid, which_node)
+            context = cls(server, msg, reply_queue, this_cuid, which_node)
             server.channel_names[msg.user_name] = this_cuid
             server.channel_table[this_cuid] = context
 
             # send request to local services, remember pending process.
-            shep_create_msg = context._mk_sh_channel_create(outbound_tag)
+            ls_create_msg = context._mk_ls_channel_create(outbound_tag)
             if send_msg:
-                LOG.debug(f"shep_inputs: {server.shep_inputs}")
-                shep_hdl = server.shep_inputs[which_node]
+                LOG.debug(f"ls_inputs: {server.ls_inputs}")
+                ls_hdl = server.ls_inputs[which_node]
                 LOG.debug(
-                    f"sending {shep_create_msg} with muid {shep_create_msg.m_uid} to shep via {shep_hdl} on node {which_node}"
+                    f"sending {ls_create_msg} with muid {ls_create_msg.m_uid} to ls via {ls_hdl} on node {which_node}"
                 )
 
                 # In cases where we are sending a large amount of
@@ -149,8 +149,8 @@ class ChannelContext:
                 # receiving messages to allow us to process responses
                 # on the input queue.
 
-                server.pending_sends.put((shep_hdl, shep_create_msg.serialize()))
-                LOG.debug(f"request {context} to shep")
+                server.pending_sends.put((ls_hdl, ls_create_msg))
+                LOG.debug(f"request {context} to ls")
 
             return True, outbound_tag, context
 
@@ -162,20 +162,19 @@ class ChannelContext:
                 desc=None,
             )
 
-            reply_channel.send(response.serialize())
-
+            reply_queue.put(response)
 
     def complete_construction(self, msg):
-        """Completes channel construction, waiting on message from shep
+        """Completes channel construction, waiting on message from local services
 
         :return: True or False, according to if construction succeeded
         """
 
-        if not isinstance(msg, dmsg.SHChannelCreateResponse):
+        if not isinstance(msg, dmsg.LSChannelCreateResponse):
             print(f"Failure: The message was: {msg}")
-        assert isinstance(msg, dmsg.SHChannelCreateResponse)
+        assert isinstance(msg, dmsg.LSChannelCreateResponse)
 
-        if dmsg.SHChannelCreateResponse.Errors.SUCCESS == msg.err:
+        if dmsg.LSChannelCreateResponse.Errors.SUCCESS == msg.err:
             self.descriptor.state = channel_desc.ChannelDescriptor.State.ACTIVE
             self.descriptor.sdesc = msg.desc
             response = dmsg.GSChannelCreateResponse(
@@ -185,7 +184,7 @@ class ChannelContext:
                 desc=self.descriptor,
             )
 
-            self.reply_channel.send(response.serialize())
+            self.reply_queue.put(response)
             create_succeeded = True
             if self.is_refcounted:
                 self.refcnt = 1  # original requester.
@@ -198,16 +197,16 @@ class ChannelContext:
             # the original create
             if self.descriptor.name in self.server.pending_channel_joins:
                 for join_req in self.server.pending_channel_joins.get(self.descriptor.name):
-                    reply_channel = self.server.get_reply_handle(join_req)
+                    reply_queue = self.server.get_reply_handle(join_req)
                     rm = dmsg.GSChannelJoinResponse(
                         tag=self.server.tag_inc(),
                         ref=join_req.tag,
                         err=dmsg.GSChannelJoinResponse.Errors.SUCCESS,
                         desc=self.descriptor,
                     )
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(f"join response to {join_req}: {rm}")
-        elif dmsg.SHChannelCreateResponse.Errors.FAIL == msg.err:
+        elif dmsg.LSChannelCreateResponse.Errors.FAIL == msg.err:
             self.descriptor.state = channel_desc.ChannelDescriptor.State.DEAD
             response = dmsg.GSChannelCreateResponse(
                 tag=self.server.tag_inc(),
@@ -224,22 +223,22 @@ class ChannelContext:
             if self.descriptor.name in self.server.pending_channel_joins:
                 LOG.warn(f"channel create name {self.descriptor.name} failed with joins pending")
 
-            self.reply_channel.send(response.serialize())
+            self.reply_queue.put(response)
             create_succeeded = False
         else:
             raise RuntimeError(f"got {str(msg)} err {msg.err} unknown")
 
-        self.reply_channel = None  # deliberately drop reference to reply channel
+        self.reply_queue = None  # deliberately drop reference to reply queue
 
         return create_succeeded
 
     @staticmethod
-    def destroy(server, msg, reply_channel):
+    def destroy(server, msg, reply_queue):
         """Action to destroy this channel
 
         :param server: global server context
         :param msg: destroy request message
-        :param reply_channel: response channel
+        :param reply_queue: response channel
         :return: True if a destroy message was issued and False otherwise
         """
         target_uid, found, errmsg = server.resolve_cuid(msg.user_name, msg.c_uid)
@@ -247,7 +246,7 @@ class ChannelContext:
 
         if not found:
             rm = gscdr(tag=server.tag_inc(), ref=msg.tag, err=gscdr.Errors.UNKNOWN, err_info=errmsg)
-            reply_channel.send(rm.serialize())
+            reply_queue.put(rm)
             LOG.debug(f"unknown channel: response to {msg}: {rm}")
             return False
         else:
@@ -256,19 +255,19 @@ class ChannelContext:
             cds = channel_desc.ChannelDescriptor.State
             if cds.DEAD == channeldesc.state:
                 rm = gscdr(tag=server.tag_inc(), ref=msg.tag, err=gscdr.Errors.BUSY)
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"gone; response to {msg}: {rm}")
                 return False
             elif cds.PENDING == channeldesc.state:
                 rm = gscdr(
                     tag=server.tag_inc(), ref=msg.tag, err=gscdr.Errors.BUSY, err_info=f"{target_uid} is pending"
                 )
-                reply_channel.send(rm.serialize())
+                reply_queue.put(rm)
                 LOG.debug(f"pending; response to {msg}: {rm}")
                 return False
             elif cds.ACTIVE == channeldesc.state:
                 channelctx.destroy_request = msg
-                channelctx.reply_channel = reply_channel
+                channelctx.reply_queue = reply_queue
 
                 if channelctx.is_refcounted and msg.dec_ref:
                     channelctx.refcnt -= 1
@@ -285,32 +284,33 @@ class ChannelContext:
 
                 if not really_destroying:  # just a refcount op that didn't cause destruction.
                     rm = gscdr(tag=server.tag_inc(), ref=msg.tag, err=gscdr.Errors.SUCCESS)
-                    reply_channel.send(rm.serialize())
+                    reply_queue.put(rm)
                     LOG.debug(f"channel {channelctx.descriptor.c_uid}: Not destroying, refcnt={channelctx.refcnt}")
                     return False
                 else:
                     channelctx.descriptor.state = cds.PENDING  # do we want a pending destruction state?
                     the_tag = server.tag_inc()
-                    shep_destroy_msg = channelctx.mk_sh_channel_destroy(the_tag)
+                    ls_destroy_msg = channelctx.mk_ls_channel_destroy(the_tag)
                     target_node = channeldesc.node
                     server.pending[the_tag] = channelctx.complete_destruction
-                    server.pending_sends.put((server.shep_inputs[target_node], shep_destroy_msg.serialize()))
+                    ls_hdl = server.ls_inputs[target_node]
+                    server.pending_sends.put((ls_hdl, ls_destroy_msg))
 
-                    LOG.debug(f"forwarded destroy {msg} as {shep_destroy_msg} to {target_node}")
+                    LOG.debug(f"forwarded destroy {msg} as {ls_destroy_msg} to {target_node}")
                     return True
             else:
                 raise NotImplementedError("close case")
 
     def complete_destruction(self, msg):
         gscdr = dmsg.GSChannelDestroyResponse
-        shcdr = dmsg.SHChannelDestroyResponse
+        lscdr = dmsg.LSChannelDestroyResponse
 
-        if shcdr.Errors.FAIL == msg.err:
+        if lscdr.Errors.FAIL == msg.err:
             rm = gscdr(
                 tag=self.server.tag_inc(), ref=self.destroy_request.tag, err=gscdr.Errors.UNKNOWN, err_info=msg.err_info
             )
             destroy_succeeded = False
-        elif shcdr.Errors.SUCCESS == msg.err:
+        elif lscdr.Errors.SUCCESS == msg.err:
             self.descriptor.state = channel_desc.ChannelDescriptor.State.DEAD
             rm = gscdr(tag=self.server.tag_inc(), ref=self.destroy_request.tag, err=gscdr.Errors.SUCCESS)
             destroy_succeeded = True
@@ -318,6 +318,6 @@ class ChannelContext:
             raise NotImplementedError("no case")
 
         LOG.debug(f"channel destroy response to {self.destroy_request}: {rm}")
-        self.reply_channel.send(rm.serialize())
+        self.reply_queue.put(rm)
 
         return destroy_succeeded

@@ -26,6 +26,7 @@ from ..infrastructure import facts as dfacts
 from ..infrastructure import parameters as parms
 from ..infrastructure import connection as dconn
 from ..infrastructure import parameters as dp
+from ..infrastructure.queue import InfraQueue
 
 ## This is defined only if the build used PMIx.
 ## If it didn't passing shouldn't cause issue
@@ -284,16 +285,16 @@ class OutputConnector:
             self._writtenTo = True
 
         forward_msg = True
-        if self._fwd_stderr is False and self._out_err == dmsg.SHFwdOutput.FDNum.STDERR.value:
+        if self._fwd_stderr is False and self._out_err == dmsg.LSFwdOutput.FDNum.STDERR.value:
             forward_msg = False
-        elif self._fwd_stdout is False and self._out_err == dmsg.SHFwdOutput.FDNum.STDOUT.value:
+        elif self._fwd_stdout is False and self._out_err == dmsg.LSFwdOutput.FDNum.STDOUT.value:
             forward_msg = False
 
         if forward_msg:
             if self._conn is None:
                 try:
-                    self._be_in.send(
-                        dmsg.SHFwdOutput(
+                    self._be_in.put(
+                        dmsg.LSFwdOutput(
                             tag=get_new_tag(),
                             idx=parms.this_process.index,
                             p_uid=self._puid,
@@ -301,7 +302,7 @@ class OutputConnector:
                             fd_num=self._out_err,
                             pid=self._proc.pid,
                             hostname=self._hostname,
-                        ).serialize()
+                        )
                     )
                 except Exception:
                     pass
@@ -316,8 +317,8 @@ class OutputConnector:
                 self._conn.send(block)
             except Exception:
                 try:
-                    self._be_in.send(
-                        dmsg.SHFwdOutput(
+                    self._be_in.put(
+                        dmsg.LSFwdOutput(
                             tag=get_new_tag(),
                             idx=parms.this_process.index,
                             p_uid=self._puid,
@@ -325,7 +326,7 @@ class OutputConnector:
                             fd_num=self._out_err,
                             pid=self._proc.pid,
                             hostname=self._hostname,
-                        ).serialize()
+                        )
                     )
                 except Exception:
                     pass
@@ -349,13 +350,13 @@ class OutputConnector:
             self._sendit(data)
 
     def flush(self):
-        is_stderr = self._out_err == dmsg.SHFwdOutput.FDNum.STDERR.value
+        is_stderr = self._out_err == dmsg.LSFwdOutput.FDNum.STDERR.value
 
         try:
             file_obj = self.file_obj
 
             if file_obj is not None:
-                io_data = file_obj.read(dmsg.SHFwdOutput.MAX)
+                io_data = file_obj.read(dmsg.LSFwdOutput.MAX)
             else:
                 io_data = None
 
@@ -430,7 +431,7 @@ class OutputConnector:
 
     @property
     def file_obj(self):
-        is_stderr = self._out_err == dmsg.SHFwdOutput.FDNum.STDERR.value
+        is_stderr = self._out_err == dmsg.LSFwdOutput.FDNum.STDERR.value
 
         if is_stderr:
             return self._proc.stderr
@@ -471,7 +472,7 @@ class FileOutputConnector:
         """
         :param file_handle: Already-opened file in "a" mode.
         :param puid: Process UID for identification.
-        :param out_err: dmsg.SHFwdOutput.FDNum.STDOUT.value or STDERR.value
+        :param out_err: dmsg.LSFwdOutput.FDNum.STDOUT.value or STDERR.value
         """
         self._file_handle = file_handle
         self._puid = puid
@@ -575,7 +576,7 @@ class FileOutputConnector:
 
         This is the subprocess pipe fd, NOT the output file handle.
         """
-        is_stderr = self._out_err == dmsg.SHFwdOutput.FDNum.STDERR.value
+        is_stderr = self._out_err == dmsg.LSFwdOutput.FDNum.STDERR.value
         return self._proc.stderr if is_stderr else self._proc.stdout
 
     @property
@@ -623,7 +624,7 @@ class AvailableLocalCUIDS:
     """Internal only class that manages Process Local CUIDs"""
 
     # We reserve dfacts.MAX_NODES cuids for the main channel for each local services.
-    LOCAL_CUID_RANGE = (dfacts.BASE_SHEP_CUID + dfacts.RANGE_SHEP_CUID) - dfacts.MAX_NODES
+    LOCAL_CUID_RANGE = (dfacts.BASE_LS_CUID + dfacts.RANGE_LS_CUID) - dfacts.MAX_NODES
     AVAILABLE_PER_NODE = LOCAL_CUID_RANGE // dfacts.MAX_NODES
 
     def __init__(self, node_index):
@@ -635,7 +636,7 @@ class AvailableLocalCUIDS:
         self._node_index = node_index
         self._active = set()
         self._initial_cuid = (
-            dfacts.BASE_SHEP_CUID + dfacts.MAX_NODES + node_index * AvailableLocalCUIDS.AVAILABLE_PER_NODE
+            dfacts.BASE_LS_CUID + dfacts.MAX_NODES + node_index * AvailableLocalCUIDS.AVAILABLE_PER_NODE
         )
         self._next_available_cuid = self._initial_cuid
         self._last_available = self._initial_cuid + AvailableLocalCUIDS.AVAILABLE_PER_NODE - 1
@@ -736,7 +737,7 @@ def send_fli_response(resp_msg, ser_resp_fli):
 
 
 class LocalServer:
-    """Handles shepherd messages in normal processing.
+    """Handles local services messages in normal processing.
 
     This object does not handle startup/teardown - instead
      it expects to be given whatever channels/pools have been made for it
@@ -744,7 +745,7 @@ class LocalServer:
      and offers a 'run' and 'cleanup' method.
     """
 
-    _DTBL = {}  # dispatch router, keyed by type of shepherd message
+    _DTBL = {}  # dispatch router, keyed by type of local services message
 
     SHUTDOWN_RESP_TIMEOUT = 0.010  # seconds, 10 ms
     QUIESCE_TIME = 1  # seconds, 1 second, join timeout for thread shutdown.
@@ -963,7 +964,7 @@ class LocalServer:
         """
         log = logging.getLogger("LS.Abnormal termination")
         try:
-            self.be_in.send(dmsg.AbnormalTermination(tag=get_new_tag(), err_info=error_str).serialize())
+            self.be_in.put(dmsg.AbnormalTermination(tag=get_new_tag(), err_info=error_str))
             log.critical("Abnormal termination sent to launcher be: %s" % error_str)
         except Exception as ex:
             log.exception("Abnormal termination exception: %s" % ex)
@@ -1052,42 +1053,38 @@ class LocalServer:
             self._abnormal_termination("ls run destroying gateway channels exception: %s" % ex)
 
         try:
-            # m12 Send SHHaltBE to BE
+            # m12 Send LSHaltBE to BE
             # tell launcher be to shut mrnet down and detach from logging
-            log.info("m12 transmitting final messsage from ls SHHaltBE")
+            log.info("m12 transmitting final messsage from ls LSHaltBE")
             dlog.detach_from_dragon_handler(dls.LS)
-            self.be_in.send(dmsg.SHHaltBE(tag=get_new_tag()).serialize())
+            self.be_in.put(dmsg.LSHaltBE(tag=get_new_tag()))
         except Exception as ex:
-            self._abnormal_termination("ls run sending SHHaltBE exception: %s" % ex)
+            self._abnormal_termination("ls run sending LSHaltBE exception: %s" % ex)
 
         log.info("exit")
 
-    def main_loop(self, shep_rh):
+    def main_loop(self, ls_rh):
         """Monitors the main LS input channel and receives messages.
         If the received message is not one of the expected that are
         handled by corresponding route decorators, then it signals
         abnormal termination of LS.
 
-        :param shep_rh: ls input channel
-        :type shep_rh: Connection object
+        :param ls_rh: ls input channel
+        :type ls_rh: Connection object
         """
         log = logging.getLogger("LS.main loop")
         log.info("start")
 
         while not self.check_shutdown():
-            msg_pre = shep_rh.recv()
-
-            if msg_pre is None:
+            try:
+                msg = ls_rh.get()
+            except Exception as ex:
+                log.info(f"LS Main Loop Got Exception: {ex=}")
+                self._abnormal_termination("ls main loop get exception: %s" % ex)
                 continue
 
-            if isinstance(msg_pre, (str, bytes, bytearray)):
-                try:
-                    msg = dmsg.parse(msg_pre)
-                except (json.JSONDecodeError, KeyError, NotImplementedError, ValueError, TypeError) as err:
-                    self._abnormal_termination("msg\n%s\nfailed parse!\n%s" % (msg_pre, err))
-                    continue
-            else:
-                msg = msg_pre
+            if msg is None:
+                continue
 
             if type(msg) in LocalServer._DTBL:
                 resp_msg = self._DTBL[type(msg)][0](self, msg=msg)
@@ -1128,16 +1125,16 @@ class LocalServer:
         :type msg: string
         """
         if target_uid == dfacts.GS_INPUT_CUID:
-            self.gs_in.send(msg.serialize())
+            self.gs_in.put(msg)
         elif target_uid == dfacts.launcher_cuid_from_index(parms.this_process.index):
-            self.be_in.send(msg.serialize())
+            self.be_in.put(msg)
         else:
             self._abnormal_termination("unknown r_c_uid: %s" % repr(msg))
 
-    @dutil.route(dmsg.SHPoolCreate, _DTBL)
-    def create_pool(self, msg: dmsg.SHPoolCreate) -> None:
+    @dutil.route(dmsg.LSPoolCreate, _DTBL)
+    def create_pool(self, msg: dmsg.LSPoolCreate) -> None:
         log = logging.getLogger("LS.create pool")
-        success, fail = mk_response_pairs(dmsg.SHPoolCreateResponse, msg.tag)
+        success, fail = mk_response_pairs(dmsg.LSPoolCreateResponse, msg.tag)
 
         error = ""
         if msg.m_uid in self.pools:
@@ -1159,10 +1156,10 @@ class LocalServer:
 
         return resp_msg
 
-    @dutil.route(dmsg.SHPoolDestroy, _DTBL)
-    def destroy_pool(self, msg: dmsg.SHPoolDestroy) -> None:
+    @dutil.route(dmsg.LSPoolDestroy, _DTBL)
+    def destroy_pool(self, msg: dmsg.LSPoolDestroy) -> None:
         log = logging.getLogger("LS.destroy pool")
-        success, fail = mk_response_pairs(dmsg.SHPoolDestroyResponse, msg.tag)
+        success, fail = mk_response_pairs(dmsg.LSPoolDestroyResponse, msg.tag)
 
         error = ""
         if msg.m_uid not in self.pools:
@@ -1183,11 +1180,11 @@ class LocalServer:
 
         return resp_msg
 
-    @dutil.route(dmsg.SHChannelCreate, _DTBL)
-    def create_channel(self, msg: dmsg.SHChannelCreate) -> None:
+    @dutil.route(dmsg.LSChannelCreate, _DTBL)
+    def create_channel(self, msg: dmsg.LSChannelCreate) -> None:
         log = logging.getLogger("LS.create channel")
-        log.info("Received an SHChannelCreate")
-        success, fail = mk_response_pairs(dmsg.SHChannelCreateResponse, msg.tag)
+        log.info("Received an LSChannelCreate")
+        success, fail = mk_response_pairs(dmsg.LSChannelCreateResponse, msg.tag)
 
         error = ""
         if msg.c_uid in self.channels:
@@ -1217,18 +1214,18 @@ class LocalServer:
             self.channels[msg.c_uid] = ch
             encoded_desc = B64.bytes_to_str(ch.serialize())
             resp_msg = success(desc=encoded_desc)
-            log.info("Received and Created a channel via SHChannelCreate")
+            log.info("Received and Created a channel via LSChannelCreate")
 
         return resp_msg
 
-    @dutil.route(dmsg.SHCreateProcessLocalChannel, _DTBL)
-    def create_process_local_channel(self, msg: dmsg.SHCreateProcessLocalChannel) -> None:
+    @dutil.route(dmsg.LSCreateProcessLocalChannel, _DTBL)
+    def create_process_local_channel(self, msg: dmsg.LSCreateProcessLocalChannel) -> None:
         log = logging.getLogger("LS.create local channel")
-        log.info("Received an SHCreateProcessLocalChannel")
+        log.info("Received an LSCreateProcessLocalChannel")
 
         # TODO: Add tracking of LS created local channels so we can destroy them as they become free
         if not msg.puid in self.puid2pid and msg.puid != 1:
-            resp_msg = dmsg.SHCreateProcessLocalChannelResponse(
+            resp_msg = dmsg.LSCreateProcessLocalChannelResponse(
                 tag=get_new_tag(),
                 ref=msg.tag,
                 err=DragonError.INVALID_ARGUMENT,
@@ -1243,26 +1240,26 @@ class LocalServer:
             self.local_channels[ch.cuid] = ch
         except dch.ChannelError as cex:
             error = "%r failed: %s" % (msg, cex)
-            resp_msg = dmsg.SHCreateProcessLocalChannelResponse(
+            resp_msg = dmsg.LSCreateProcessLocalChannelResponse(
                 tag=get_new_tag(), ref=msg.tag, err=DragonError.INVALID_OPERATION, errInfo=error
             )
             send_fli_response(resp_msg, msg.respFLI)
             return
 
         encoded_desc = b64encode(ch.serialize())
-        resp_msg = dmsg.SHCreateProcessLocalChannelResponse(
+        resp_msg = dmsg.LSCreateProcessLocalChannelResponse(
             tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS, serChannel=encoded_desc
         )
-        log.info("Received and Created a channel via SHCreateProcessLocalChannel with cuid=%s" % ch.cuid)
+        log.info("Received and Created a channel via LSCreateProcessLocalChannel with cuid=%s" % ch.cuid)
         send_fli_response(resp_msg, msg.respFLI)
 
-    @dutil.route(dmsg.SHDestroyProcessLocalChannel, _DTBL)
-    def destroy_process_local_channel(self, msg: dmsg.SHDestroyProcessLocalChannel) -> None:
+    @dutil.route(dmsg.LSDestroyProcessLocalChannel, _DTBL)
+    def destroy_process_local_channel(self, msg: dmsg.LSDestroyProcessLocalChannel) -> None:
         log = logging.getLogger("LS.destroy local channel")
-        log.info("Received an SHDestroyProcessLocalChannel for cuid=%s" % msg.cuid)
+        log.info("Received an LSDestroyProcessLocalChannel for cuid=%s" % msg.cuid)
 
         if not msg.puid in self.puid2pid:
-            resp_msg = dmsg.SHDestroyProcessLocalChannelResponse(
+            resp_msg = dmsg.LSDestroyProcessLocalChannelResponse(
                 tag=get_new_tag(),
                 ref=msg.tag,
                 err=DragonError.INVALID_ARGUMENT,
@@ -1280,23 +1277,23 @@ class LocalServer:
 
         except Exception as ex:
             error = "%r failed: %s" % (msg, ex)
-            resp_msg = dmsg.SHDestroyProcessLocalChannelResponse(
+            resp_msg = dmsg.LSDestroyProcessLocalChannelResponse(
                 tag=get_new_tag(), ref=msg.tag, err=DragonError.INVALID_OPERATION, errInfo=error
             )
             send_fli_response(resp_msg, msg.respFLI)
             return
 
-        resp_msg = dmsg.SHDestroyProcessLocalChannelResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
-        log.info("Received and Destroyed a channel via SHDestroyProcessLocalChannel")
+        resp_msg = dmsg.LSDestroyProcessLocalChannelResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
+        log.info("Received and Destroyed a channel via LSDestroyProcessLocalChannel")
         send_fli_response(resp_msg, msg.respFLI)
 
-    @dutil.route(dmsg.SHCreateProcessLocalPool, _DTBL)
-    def create_process_local_pool(self, msg: dmsg.SHCreateProcessLocalPool) -> None:
+    @dutil.route(dmsg.LSCreateProcessLocalPool, _DTBL)
+    def create_process_local_pool(self, msg: dmsg.LSCreateProcessLocalPool) -> None:
         log = logging.getLogger("LS.create local pool")
-        log.info("Received an SHCreateProcessLocalPool")
+        log.info("Received an LSCreateProcessLocalPool")
 
         if not msg.puid in self.puid2pid:
-            resp_msg = dmsg.SHCreateProcessLocalPoolResponse(
+            resp_msg = dmsg.LSCreateProcessLocalPoolResponse(
                 tag=get_new_tag(),
                 ref=msg.tag,
                 err=DragonError.INVALID_ARGUMENT,
@@ -1310,26 +1307,26 @@ class LocalServer:
             self.apt[self.puid2pid[msg.puid]].props.local_muids.add(pool.muid)
         except Exception as cex:
             error = "%r failed: %s" % (msg, cex)
-            resp_msg = dmsg.SHCreateProcessLocalPoolResponse(
+            resp_msg = dmsg.LSCreateProcessLocalPoolResponse(
                 tag=get_new_tag(), ref=msg.tag, err=DragonError.INVALID_OPERATION, errInfo=error
             )
             send_fli_response(resp_msg, msg.respFLI)
             return
 
         encoded_desc = b64encode(pool.serialize())
-        resp_msg = dmsg.SHCreateProcessLocalPoolResponse(
+        resp_msg = dmsg.LSCreateProcessLocalPoolResponse(
             tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS, serPool=encoded_desc
         )
-        log.info("Received and Created a pool via SHCreateProcessLocalPool")
+        log.info("Received and Created a pool via LSCreateProcessLocalPool")
         send_fli_response(resp_msg, msg.respFLI)
 
-    @dutil.route(dmsg.SHRegisterProcessLocalPool, _DTBL)
-    def register_process_local_pool(self, msg: dmsg.SHRegisterProcessLocalPool) -> None:
+    @dutil.route(dmsg.LSRegisterProcessLocalPool, _DTBL)
+    def register_process_local_pool(self, msg: dmsg.LSRegisterProcessLocalPool) -> None:
         log = logging.getLogger("LS.register local pool")
-        log.info("Received an SHRegisterProcessLocalPool")
+        log.info("Received an LSRegisterProcessLocalPool")
 
         if not msg.puid in self.puid2pid:
-            resp_msg = dmsg.SHRegisterProcessLocalPoolResponse(
+            resp_msg = dmsg.LSRegisterProcessLocalPoolResponse(
                 tag=get_new_tag(),
                 ref=msg.tag,
                 err=DragonError.INVALID_ARGUMENT,
@@ -1343,23 +1340,23 @@ class LocalServer:
             self.apt[self.puid2pid[msg.puid]].props.local_muids.add(pool.muid)
         except Exception as cex:
             error = "%r failed: %s" % (msg, cex)
-            resp_msg = dmsg.SHRegisterProcessLocalPoolResponse(
+            resp_msg = dmsg.LSRegisterProcessLocalPoolResponse(
                 tag=get_new_tag(), ref=msg.tag, err=DragonError.INVALID_OPERATION, errInfo=error
             )
             send_fli_response(resp_msg, msg.respFLI)
             return
 
-        resp_msg = dmsg.SHRegisterProcessLocalPoolResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
-        log.info("Received and Registered a pool via SHRegisterProcessLocalPool")
+        resp_msg = dmsg.LSRegisterProcessLocalPoolResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
+        log.info("Received and Registered a pool via LSRegisterProcessLocalPool")
         send_fli_response(resp_msg, msg.respFLI)
 
-    @dutil.route(dmsg.SHDeregisterProcessLocalPool, _DTBL)
-    def deregister_process_local_pool(self, msg: dmsg.SHDeregisterProcessLocalPool) -> None:
+    @dutil.route(dmsg.LSDeregisterProcessLocalPool, _DTBL)
+    def deregister_process_local_pool(self, msg: dmsg.LSDeregisterProcessLocalPool) -> None:
         log = logging.getLogger("LS.deregister local pool")
-        log.info("Received an SHDeregisterProcessLocalPool")
+        log.info("Received an LSDeregisterProcessLocalPool")
 
         if not msg.puid in self.puid2pid:
-            resp_msg = dmsg.SHDeregisterProcessLocalPoolResponse(
+            resp_msg = dmsg.LSDeregisterProcessLocalPoolResponse(
                 tag=get_new_tag(),
                 ref=msg.tag,
                 err=DragonError.INVALID_ARGUMENT,
@@ -1374,20 +1371,20 @@ class LocalServer:
             pool.detach()
         except Exception as cex:
             error = "%r failed: %s" % (msg, cex)
-            resp_msg = dmsg.SHDeregisterProcessLocalPoolResponse(
+            resp_msg = dmsg.LSDeregisterProcessLocalPoolResponse(
                 tag=get_new_tag(), ref=msg.tag, err=DragonError.INVALID_OPERATION, errInfo=error
             )
             send_fli_response(resp_msg, msg.respFLI)
             return
 
-        resp_msg = dmsg.SHDeregisterProcessLocalPoolResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
-        log.info("Received and Deregistered a pool via SHDeregisterProcessLocalPool")
+        resp_msg = dmsg.LSDeregisterProcessLocalPoolResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
+        log.info("Received and Deregistered a pool via LSDeregisterProcessLocalPool")
         send_fli_response(resp_msg, msg.respFLI)
 
-    @dutil.route(dmsg.SHChannelDestroy, _DTBL)
-    def destroy_channel(self, msg: dmsg.SHChannelDestroy) -> None:
+    @dutil.route(dmsg.LSChannelDestroy, _DTBL)
+    def destroy_channel(self, msg: dmsg.LSChannelDestroy) -> None:
         log = logging.getLogger("LS.destroy channel")
-        success, fail = mk_response_pairs(dmsg.SHChannelDestroyResponse, msg.tag)
+        success, fail = mk_response_pairs(dmsg.LSChannelDestroyResponse, msg.tag)
 
         error = ""
         if msg.c_uid not in self.channels:
@@ -1408,10 +1405,10 @@ class LocalServer:
 
         return resp_msg
 
-    @dutil.route(dmsg.SHMultiProcessCreate, _DTBL)
-    def create_group(self, msg: dmsg.SHMultiProcessCreate) -> None:
+    @dutil.route(dmsg.LSMultiProcessCreate, _DTBL)
+    def create_group(self, msg: dmsg.LSMultiProcessCreate) -> None:
         log = logging.getLogger("LS.create_group")
-        success, fail = mk_response_pairs(dmsg.SHMultiProcessCreateResponse, msg.tag)
+        success, _ = mk_response_pairs(dmsg.LSMultiProcessCreateResponse, msg.tag)
         failed = False
         err_info = ""
         # Stand up the PMIx Server if PMIx backend has been requested
@@ -1491,23 +1488,23 @@ class LocalServer:
                 msg=process_create_msg, pmi_group_info=msg.pmi_group_info, base_rank=base_rank, guid=msg.guid
             )
             responses.append(response)
-            if response.err == dmsg.SHProcessCreateResponse.Errors.FAIL:
+            if response.err == dmsg.LSProcessCreateResponse.Errors.FAIL:
                 failed = True
 
         # always return success
         resp_msg = success(responses=responses, failed=failed, err_info=err_info)
         return resp_msg
 
-    @dutil.route(dmsg.SHProcessCreate, _DTBL)
+    @dutil.route(dmsg.LSProcessCreate, _DTBL)
     def create_process(
         self,
-        msg: dmsg.SHProcessCreate,
+        msg: dmsg.LSProcessCreate,
         pmi_group_info: Optional[dmsg.PMIGroupInfo] = None,
         base_rank: int = None,
         guid: int = None,
     ) -> None:
         log = logging.getLogger("LS.create process")
-        success, fail = mk_response_pairs(dmsg.SHProcessCreateResponse, msg.tag)
+        success, fail = mk_response_pairs(dmsg.LSProcessCreateResponse, msg.tag)
 
         if msg.t_p_uid in self.puid2pid:
             error = "msg.t_p_uid=%s already exists" % msg.t_p_uid
@@ -1544,9 +1541,9 @@ class LocalServer:
             log.debug("Env %s/%s -> %s: %s", idx, nenv, k, v)
 
         # Add in the local services return serialized channel descriptor.
-        shep_return_ch = self.make_local_channel()
-        shep_return_cd = b64encode(shep_return_ch.serialize())
-        the_env[dfacts.env_name(dfacts.SHEP_RET_CD)] = shep_return_cd
+        ls_return_ch = self.make_local_channel()
+        ls_return_queue = InfraQueue(main_channel=ls_return_ch)
+        the_env[dfacts.env_name(dfacts.LS_RET_QD)] = ls_return_queue.serialize()
 
         gs_ret_chan_resp = None
         stdin_conn = None
@@ -1562,22 +1559,23 @@ class LocalServer:
 
         if msg.gs_ret_chan_msg is not None:
             gs_ret_chan_resp = self.create_channel(msg.gs_ret_chan_msg)
-            if gs_ret_chan_resp.err != dmsg.SHChannelCreateResponse.Errors.SUCCESS:
+            if gs_ret_chan_resp.err != dmsg.LSChannelCreateResponse.Errors.SUCCESS:
                 resp_msg = fail("Failed creating the GS ret channel for new process: %s" % stdin_resp.err_info)
                 return resp_msg
-            desc = gs_ret_chan_resp.desc
-            the_env[dfacts.ENV_GS_RET_CD] = desc
+            gs_ret_chan = dch.Channel.attach(B64.str_to_bytes(gs_ret_chan_resp.desc))
+            gs_ret_queue = InfraQueue(main_channel=gs_ret_chan)
+            the_env[dfacts.ENV_GS_RET_QD] = gs_ret_queue.serialize()
 
         if msg.stdin_msg is not None:
             stdin_resp = self.create_channel(msg.stdin_msg)
-            if stdin_resp.err != dmsg.SHChannelCreateResponse.Errors.SUCCESS:
+            if stdin_resp.err != dmsg.LSChannelCreateResponse.Errors.SUCCESS:
                 resp_msg = fail("Failed creating the stdin channel for new process: %s" % stdin_resp.err_info)
                 return resp_msg
             stdin_conn = mk_input_connection_over_channel(stdin_resp.desc)
 
         if msg.stdout_msg is not None:
             stdout_resp = self.create_channel(msg.stdout_msg)
-            if stdout_resp.err != dmsg.SHChannelCreateResponse.Errors.SUCCESS:
+            if stdout_resp.err != dmsg.LSChannelCreateResponse.Errors.SUCCESS:
                 # TBD: We need to destroy the stdin channel if it exists
                 resp_msg = fail("Failed creating the stdout channel for new process: %s" % stdout_resp.err_info)
                 return resp_msg
@@ -1593,7 +1591,7 @@ class LocalServer:
 
         if msg.stderr_msg is not None:
             stderr_resp = self.create_channel(msg.stderr_msg)
-            if stderr_resp.err != dmsg.SHChannelCreateResponse.Errors.SUCCESS:
+            if stderr_resp.err != dmsg.LSChannelCreateResponse.Errors.SUCCESS:
                 # TBD: We need to destroy the stdin and stdout channels if they exist
                 resp_msg = fail("Failed creating the stderr channel for new process: %s" % stderr_resp.err_info)
                 return resp_msg
@@ -1721,14 +1719,14 @@ class LocalServer:
                 stdout_connector = FileOutputConnector(
                     file_handle=stdout_file_handle,
                     puid=msg.t_p_uid,
-                    out_err=dmsg.SHFwdOutput.FDNum.STDOUT.value,
+                    out_err=dmsg.LSFwdOutput.FDNum.STDOUT.value,
                 )
             else:
                 stdout_connector = OutputConnector(
                     be_in=self.be_in,
                     puid=msg.t_p_uid,
                     hostname=self.hostname,
-                    out_err=dmsg.SHFwdOutput.FDNum.STDOUT.value,
+                    out_err=dmsg.LSFwdOutput.FDNum.STDOUT.value,
                     conn=stdout_conn,
                     root_proc=stdout_root,
                     critical_proc=False,
@@ -1738,7 +1736,7 @@ class LocalServer:
                 stderr_connector = FileOutputConnector(
                     file_handle=stderr_file_handle,
                     puid=msg.t_p_uid,
-                    out_err=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                    out_err=dmsg.LSFwdOutput.FDNum.STDERR.value,
                 )
             elif msg.stderr == dmsg.STDOUT and stdout_file_handle is not None:
                 # Shared connector - streams merged at OS level via subprocess.STDOUT
@@ -1748,7 +1746,7 @@ class LocalServer:
                     be_in=self.be_in,
                     puid=msg.t_p_uid,
                     hostname=self.hostname,
-                    out_err=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                    out_err=dmsg.LSFwdOutput.FDNum.STDERR.value,
                     conn=stderr_conn,
                     root_proc=stderr_root,
                     critical_proc=False,
@@ -1768,7 +1766,7 @@ class LocalServer:
                         stdout_connector=stdout_connector,
                         stderr_connector=stderr_connector,
                         layout=msg.layout,
-                        local_cuids=set([shep_return_ch.cuid]),
+                        local_cuids={ls_return_ch.cuid},
                         local_muids=set(),
                         creation_msg_tag=msg.tag,
                     ),
@@ -1839,11 +1837,11 @@ class LocalServer:
 
         return resp_msg
 
-    @dutil.route(dmsg.SHMultiProcessKill, _DTBL)
-    def kill_group(self, msg: dmsg.SHMultiProcessKill) -> None:
+    @dutil.route(dmsg.LSMultiProcessKill, _DTBL)
+    def kill_group(self, msg: dmsg.LSMultiProcessKill) -> None:
         log = logging.getLogger("LS.kill_group")
         log.debug("handling %s", msg)
-        success, fail = mk_response_pairs(dmsg.SHMultiProcessKillResponse, msg.tag)
+        success, _ = mk_response_pairs(dmsg.LSMultiProcessKillResponse, msg.tag)
 
         responses = []
         failed = False
@@ -1853,7 +1851,7 @@ class LocalServer:
             response = self.kill_process(process_kill_msg)
             if response:
                 responses.append(response)
-                if response.err == dmsg.SHProcessKillResponse.Errors.FAIL:
+                if response.err == dmsg.LSProcessKillResponse.Errors.FAIL:
                     failed = True
 
         # always return success
@@ -1861,11 +1859,11 @@ class LocalServer:
         log.debug("done handling %s", msg)
         return resp_msg
 
-    @dutil.route(dmsg.SHProcessKill, _DTBL)
-    def kill_process(self, msg: dmsg.SHProcessKill) -> None:
+    @dutil.route(dmsg.LSProcessKill, _DTBL)
+    def kill_process(self, msg: dmsg.LSProcessKill) -> None:
         log = logging.getLogger("LS.kill process")
         log.debug("handling %s", msg)
-        success, fail = mk_response_pairs(dmsg.SHProcessKillResponse, msg.tag)
+        success, fail = mk_response_pairs(dmsg.LSProcessKillResponse, msg.tag)
 
         if msg.hide_stderr:
             with self.apt_lock:
@@ -1895,8 +1893,8 @@ class LocalServer:
 
         return resp_msg
 
-    @dutil.route(dmsg.SHFwdInput, _DTBL)
-    def fwd_input(self, msg: dmsg.SHFwdInput) -> None:
+    @dutil.route(dmsg.LSFwdInput, _DTBL)
+    def fwd_input(self, msg: dmsg.LSFwdInput) -> None:
         log = logging.getLogger("LS.fwd input handler")
 
         target = msg.t_p_uid
@@ -1917,11 +1915,11 @@ class LocalServer:
             if sel:
                 try:
                     output_data = msg.input.encode()
-                    if len(output_data) > dmsg.SHFwdInput.MAX:
-                        log.warning("truncating request of %s to %s" % (len(output_data), dmsg.SHFwdInput.MAX))
+                    if len(output_data) > dmsg.LSFwdInput.MAX:
+                        log.warning("truncating request of %s to %s" % (len(output_data), dmsg.LSFwdInput.MAX))
 
                     fh = sel[0][0].fileobj
-                    fh.write(output_data[: dmsg.SHFwdInput.MAX])
+                    fh.write(output_data[: dmsg.LSFwdInput.MAX])
                 except (OSError, BlockingIOError) as err:
                     error = "%s" % err
             else:
@@ -1935,7 +1933,7 @@ class LocalServer:
                 targ_proc.stdin = None
 
         if msg.confirm:
-            success, fail = mk_response_pairs(dmsg.SHFwdInputErr, msg.tag)
+            success, fail = mk_response_pairs(dmsg.LSFwdInputErr, msg.tag)
             if error:
                 resp_msg = fail(error)
             else:
@@ -1943,27 +1941,27 @@ class LocalServer:
 
             return resp_msg
 
-    @dutil.route(dmsg.SHSetKV, _DTBL)
-    def handle_set_kv(self, msg: dmsg.SHSetKV) -> None:
+    @dutil.route(dmsg.LSSetKV, _DTBL)
+    def handle_set_kv(self, msg: dmsg.LSSetKV) -> None:
         log = logging.getLogger("LS.set key-value")
         if msg.value == "":
             if msg.key in self.kvs:
                 del self.kvs[msg.key]
         else:
             self.kvs[msg.key] = msg.value
-        resp_msg = dmsg.SHSetKVResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
-        log.info("Received SHSetKV message and processed it.")
+        resp_msg = dmsg.LSSetKVResponse(tag=get_new_tag(), ref=msg.tag, err=DragonError.SUCCESS)
+        log.info("Received LSSetKV message and processed it.")
         send_fli_response(resp_msg, msg.respFLI)
 
-    @dutil.route(dmsg.SHGetKV, _DTBL)
-    def handle_get_kv(self, msg: dmsg.SHGetKV) -> None:
+    @dutil.route(dmsg.LSGetKV, _DTBL)
+    def handle_get_kv(self, msg: dmsg.LSGetKV) -> None:
         log = logging.getLogger("LS.get key-value")
         if msg.key not in self.kvs:
-            resp_msg = dmsg.SHGetKVResponse(tag=get_new_tag(), ref=msg.tag, value="", err=DragonError.NOT_FOUND)
+            resp_msg = dmsg.LSGetKVResponse(tag=get_new_tag(), ref=msg.tag, value="", err=DragonError.NOT_FOUND)
         else:
             val = self.kvs[msg.key]
-            resp_msg = dmsg.SHGetKVResponse(tag=get_new_tag(), ref=msg.tag, value=val, err=DragonError.SUCCESS)
-        log.info("Received SHSetKV message and processed it.")
+            resp_msg = dmsg.LSGetKVResponse(tag=get_new_tag(), ref=msg.tag, value=val, err=DragonError.SUCCESS)
+        log.info("Received LSSetKV message and processed it.")
         send_fli_response(resp_msg, msg.respFLI)
 
     @dutil.route(dmsg.AbnormalTermination, _DTBL)
@@ -1977,30 +1975,30 @@ class LocalServer:
         self.set_gs_shutdown()
         log = logging.getLogger("LS.forward GSHalted msg")
         log.info("is_primary=True and GSHalted recvd")
-        self.be_in.send(msg.serialize())
+        self.be_in.put(msg)
 
-    @dutil.route(dmsg.SHTeardown, _DTBL)
-    def teardown_ls(self, msg: dmsg.SHTeardown) -> None:
+    @dutil.route(dmsg.LSTeardown, _DTBL)
+    def teardown_ls(self, msg: dmsg.LSTeardown) -> None:
         log = logging.getLogger("LS.teardown LS")
-        log.info("isPrimary=%s handling SHTeardown" % self.is_primary)
+        log.info("isPrimary=%s handling LSTeardown" % self.is_primary)
         self.set_shutdown(msg)
 
-    @dutil.route(dmsg.SHHaltTA, _DTBL)
+    @dutil.route(dmsg.LSHaltTA, _DTBL)
     def handle_halting_ta(self, msg):
-        log = logging.getLogger("LS.forward SHHaltTA msg")
+        log = logging.getLogger("LS.forward LSHaltTA msg")
         log.info("handling %s" % msg)
-        # m8 Forward SHHaltTA to TA
-        self.ta_in.send(msg.serialize())
+        # m8 Forward LSHaltTA to TA
+        self.ta_in.put(msg)
 
     @dutil.route(dmsg.TAHalted, _DTBL)
     def handle_ta_halted(self, msg):
         self.set_ta_shutdown()
         log = logging.getLogger("LS.forward TAHalted msg")
         log.info("handling %s" % msg)
-        self.be_in.send(msg.serialize())
+        self.be_in.put(msg)
 
-    @dutil.route(dmsg.SHDumpState, _DTBL)
-    def dump_state(self, msg: dmsg.SHDumpState) -> None:
+    @dutil.route(dmsg.LSDumpState, _DTBL)
+    def dump_state(self, msg: dmsg.LSDumpState) -> None:
         log = logging.getLogger("LS.dump state")
         the_dump = "%s" % self
         if msg.filename is None:
@@ -2112,7 +2110,7 @@ class LocalServer:
 
                 ecode = os.waitstatus_to_exitcode(exit_status)
                 log.info("p_uid: %s pid: %s ecode=%s" % (proc.props.p_uid, died_pid, ecode))
-                resp = dmsg.SHProcessExit(
+                resp = dmsg.LSProcessExit(
                     tag=get_new_tag(),
                     exit_code=ecode,
                     p_uid=proc.props.p_uid,
@@ -2121,7 +2119,7 @@ class LocalServer:
 
                 if proc.props.p_uid != dfacts.GS_PUID:
                     if proc.props.r_c_uid is None:
-                        self.gs_in.send(resp.serialize())
+                        self.gs_in.put(resp)
                         log.info("transmit %s via gs_in" % repr(resp))
                     else:
                         r_c_uid = proc.props.r_c_uid
@@ -2131,10 +2129,10 @@ class LocalServer:
                 # Delete process local channels and pools and reclaim their uids.
                 self.cleanup_local_channels_pools(proc)
 
-                # If we haven't received SHTeardown yet
+                # If we haven't received LSTeardown yet
                 if proc.props.critical and not self.check_shutdown():
                     if proc.props.p_uid == dfacts.GS_PUID:
-                        # if this is GS and we haven't received GSHalted yet and SHTeardown
+                        # if this is GS and we haven't received GSHalted yet and LSTeardown
                         # has not been received then this is an abnormal termination condition.
                         if self.is_primary and (not self.check_gs_shutdown()) and not self.check_shutdown():
                             # Signal abnormal termination and notify Launcher BE
@@ -2153,7 +2151,7 @@ class LocalServer:
                     proc.wait(0)
                     # Remember to close any open connections for stdout and stderr.
                     # If they weren't opened, the close methods will handle that. The
-                    # underlying channel will be decref'ed when the SHProcessExit is
+                    # underlying channel will be decref'ed when the LSProcessExit is
                     # received by global services (see server.py in GS).
                     if proc.props.stdout_connector is not None:
                         self.exited_channel_output_monitors.put(proc.props.stdout_connector)
@@ -2228,16 +2226,16 @@ class LocalServer:
                         "OOM CRITICAL: Free memory on node %s with hostname %s is less than %s%% with %s bytes available. Runtime is coming down.\n"
                         % (parms.this_process.index, self.hostname, int(100 - mem_utilization) + 1, mem_bytes)
                     )
-                    self.be_in.send(
-                        dmsg.SHFwdOutput(
+                    self.be_in.put(
+                        dmsg.LSFwdOutput(
                             tag=get_new_tag(),
                             idx=parms.this_process.index,
                             p_uid=parms.this_process.my_puid,
                             data=critical_msg,
-                            fd_num=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                            fd_num=dmsg.LSFwdOutput.FDNum.STDERR.value,
                             pid=pid,
                             hostname=self.hostname,
-                        ).serialize()
+                        )
                     )
                     self._abnormal_termination(critical_msg)
                 elif mem_utilization >= warn_pct:
@@ -2247,16 +2245,16 @@ class LocalServer:
                     )
                     log.info(warning_msg)
                     if not suppress_warnings:
-                        self.be_in.send(
-                            dmsg.SHFwdOutput(
+                        self.be_in.put(
+                            dmsg.LSFwdOutput(
                                 tag=get_new_tag(),
                                 idx=parms.this_process.index,
                                 p_uid=parms.this_process.my_puid,
                                 data=warning_msg,
-                                fd_num=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                                fd_num=dmsg.LSFwdOutput.FDNum.STDERR.value,
                                 pid=pid,
                                 hostname=self.hostname,
-                            ).serialize()
+                            )
                         )
 
                 def_pool_pct = def_pool.utilization
@@ -2276,16 +2274,16 @@ class LocalServer:
                         )
                         log.info(warning_msg)
                         if not suppress_warnings:
-                            self.be_in.send(
-                                dmsg.SHFwdOutput(
+                            self.be_in.put(
+                                dmsg.LSFwdOutput(
                                     tag=get_new_tag(),
                                     idx=parms.this_process.index,
                                     p_uid=parms.this_process.my_puid,
                                     data=warning_msg,
-                                    fd_num=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                                    fd_num=dmsg.LSFwdOutput.FDNum.STDERR.value,
                                     pid=pid,
                                     hostname=self.hostname,
-                                ).serialize()
+                                )
                             )
                 else:
                     def_pool_consecutive_events = 0
@@ -2312,16 +2310,16 @@ class LocalServer:
                 ) % (def_pool_events, parms.this_process.index, self.hostname, def_pool_event_min_pct)
                 log.info(warning_msg)
                 if not suppress_warnings:
-                    self.be_in.send(
-                        dmsg.SHFwdOutput(
+                    self.be_in.put(
+                        dmsg.LSFwdOutput(
                             tag=get_new_tag(),
                             idx=parms.this_process.index,
                             p_uid=parms.this_process.my_puid,
                             data=warning_msg,
-                            fd_num=dmsg.SHFwdOutput.FDNum.STDERR.value,
+                            fd_num=dmsg.LSFwdOutput.FDNum.STDERR.value,
                             pid=pid,
                             hostname=self.hostname,
-                        ).serialize()
+                        )
                     )
 
             log.info("Exiting")
@@ -2409,7 +2407,7 @@ class LocalServer:
         """
 
         def add_proc_streams(self, server, proc: PopenProps):
-            # carried data is (ProcessProps, closure to make SHFwdOutput, whether stderr or not)
+            # carried data is (ProcessProps, closure to make LSFwdOutput, whether stderr or not)
             try:
                 self.register(proc.stdout, selectors.EVENT_READ, data=proc.props.stdout_connector)
             except ValueError:  # file handle could be closed or None: a race, so must catch
@@ -2432,7 +2430,7 @@ class LocalServer:
         """Thread monitors outbound std* activity from processes we started.
 
             Any stderr activity on a 'critical' (e.g. infrastructure) process
-            running under this shepherd will cause an error shutdown.
+            running under this local services will cause an error shutdown.
 
         :return: None, exits on self.check_shutdown()
         """

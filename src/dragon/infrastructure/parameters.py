@@ -229,16 +229,16 @@ class LaunchParameters:
     :type DEFAULT_PD: str
     :param INF_PD: Base64 encoded serialized descriptor of the default infrastructure memory pool, defaults to ''.
     :type INF_PD: str
-    :param LOCAL_SHEP_CD: Base64 encoded serialized descriptor of the channel to send to the local services on the same node, defaults to ''.
-    :type LOCAL_SHEP_CD: str
+    :param LOCAL_LS_QD: Serialized descriptor of the queue to send to the local services on the same node, defaults to ''.
+    :type LOCAL_LS_QD: str
     :param LOCAL_BE_CD: Base64 encoded serialized descriptor of the channel to send to the launcher backend on the same node, defaults to ''.
     :type LOCAL_BE_CD:  str
-    :param GS_CD: Base64 encoded serialized descriptor of the channel to send to global services, defaults to ''.
-    :type GS_CD: str
-    :param GS_RET_CD: Base64 encoded serialized descriptor of the channel to receive from global services, defaults to ''.
-    :type GS_RET_CD: str
-    :param SHEP_RET_CD: Base64 encoded serialized descriptor of the channel to receive from the local services on the same node, defaults to ''.
-    :type SHEP_RET_CD: str
+    :param GS_QD: Serialized descriptor of the queue to send to global services, defaults to ''.
+    :type GS_QD: str
+    :param GS_RET_QD: Base64 encoded serialized descriptor of the channel to receive from global services, defaults to ''.
+    :type GS_RET_QD: str
+    :param LS_RET_QD: Base64 encoded serialized descriptor of the channel to receive from the local services on the same node, defaults to ''.
+    :type LS_RET_QD: str
     :param DEFAULT_SEG_SZ: Size of the default user managed memory pool in bytes, defaults to 2**32.
     :type DEFAULT_SEG_SZ: int
     :param INF_SEG_SZ: Size of the default infrastructure managed memory pool in bytes, defaults to 2**30.
@@ -261,7 +261,7 @@ class LaunchParameters:
     :type USER_RETURN_WHEN_MODE: str
     :param GW_CAPACITY: Positive capacity of gateway channels, defaults to 2048.
     :type GW_CAPACITY: int
-    :param HSTA_MAX_EJECTION_MB: Size in MB of buffers used for network receive operations. This controls network ejection rate, defaults to 8.
+    :param HSTA_MAX_EJECTION_MB: Size in MB of buffers used for network receive operations. This controls network ejection rate, defaults to 64.
     :type HSTA_MAX_EJECTION_MB: int
     :param HSTA_MAX_GETMSG_MB: Size in MB of buffers used for local `'getmsg`' operations. This controls memory consumption rate for messages with `'GETMSG`' protocol, defaults to 8.
     :type HSTA_MAX_GETMSG_MB: int
@@ -295,11 +295,11 @@ class LaunchParameters:
             TypedParm(name=dfacts.INDEX, cast=typecast(int), check=nonnegative, default=0),
             TypedParm(name=dfacts.DEFAULT_PD, cast=typecast(str), check=check_base64, default=""),
             TypedParm(name=dfacts.INF_PD, cast=typecast(str), check=check_base64, default=""),
-            TypedParm(name=dfacts.LOCAL_SHEP_CD, cast=typecast(str), check=check_base64, default=""),
+            TypedParm(name=dfacts.LOCAL_LS_QD, cast=typecast(str), check=check_base64, default=""),
             TypedParm(name=dfacts.LOCAL_BE_CD, cast=typecast(str), check=check_base64, default=""),
-            TypedParm(name=dfacts.GS_RET_CD, cast=typecast(str), check=check_base64, default=""),
-            TypedParm(name=dfacts.SHEP_RET_CD, cast=typecast(str), check=check_base64, default=""),
-            TypedParm(name=dfacts.GS_CD, cast=typecast(str), check=check_base64, default=""),
+            TypedParm(name=dfacts.GS_RET_QD, cast=typecast(str), check=check_base64, default=""),
+            TypedParm(name=dfacts.LS_RET_QD, cast=typecast(str), check=check_base64, default=""),
+            TypedParm(name=dfacts.GS_QD, cast=typecast(str), check=check_base64, default=""),
             TypedParm(
                 name=dfacts.DEFAULT_SEG_SZ,
                 cast=typecast(int),
@@ -347,7 +347,7 @@ class LaunchParameters:
                 check=nonnegative,
                 default=dfacts.DRAGON_DEFAULT_NUM_GW_CHANNELS_PER_NODE,
             ),
-            TypedParm(name=dfacts.HSTA_MAX_EJECTION_MB, cast=typecast(int), check=positive, default=8),
+            TypedParm(name=dfacts.HSTA_MAX_EJECTION_MB, cast=typecast(int), check=positive, default=64),
             TypedParm(name=dfacts.HSTA_MAX_GETMSG_MB, cast=typecast(int), check=positive, default=8),
             TypedParm(name=dfacts.HSTA_FABRIC_BACKEND, cast=typecast(str), check=nocheck),
             TypedParm(
@@ -425,7 +425,7 @@ class LaunchParameters:
         cls.PARMS = PARMS
 
         cls.NODE_LOCAL_PARAMS = (
-            frozenset([dfacts.DEFAULT_PD, dfacts.INF_PD, dfacts.LOCAL_SHEP_CD, dfacts.LOCAL_BE_CD, dfacts.BE_CUID])
+            frozenset([dfacts.DEFAULT_PD, dfacts.INF_PD, dfacts.LOCAL_LS_QD, dfacts.LOCAL_BE_CD, dfacts.BE_CUID])
             | cls.gw_env_vars
         )
 
@@ -550,7 +550,7 @@ class Policy:
         return (self._wait_mode, self._return_from_send_when)
 
     def __setstate__(self, state):
-        (wait_mode, return_from_send_when) = state
+        wait_mode, return_from_send_when = state
         self._wait_mode = wait_mode
         self._return_from_send_when = return_from_send_when
 

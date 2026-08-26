@@ -17,7 +17,6 @@ import dragon.globalservices.server as dserver
 import dragon.infrastructure.facts as dfacts
 import dragon.dlogging.util as dlog
 import dragon.infrastructure.messages as dmsg
-import dragon.infrastructure.connection as dconn
 import dragon.infrastructure.parameters as dparm
 from dragon.infrastructure.node_desc import NodeDescriptor
 
@@ -42,6 +41,7 @@ from dragon.infrastructure.process_desc import ProcessDescriptor
 from dragon.infrastructure.policy import Policy
 
 from dragon.utils import B64
+from dragon.infrastructure.queue import InfraQueue
 
 
 def bringup_channels(gs_stdout, env_updates, channel_overrides, logname=""):
@@ -51,22 +51,30 @@ def bringup_channels(gs_stdout, env_updates, channel_overrides, logname=""):
 
     dparm.this_process = dparm.LaunchParameters.from_env(env_updates)
 
+    # Attach InfraQueue handles directly from the serialized descriptors stored in the
+    # launch parameters.  startup.single_connect_to_default_channels applies an
+    # extra B64.str_to_bytes decode before calling Queue.attach, which is
+    # incompatible with the Queue serialization format; bypass it by passing
+    # the already-attached queues as test overrides.
+    gs_input_q = InfraQueue.attach(dparm.this_process.gs_qd)
+    shep_input_q = InfraQueue.attach(dparm.this_process.local_ls_qd)
+    bela_input_q = InfraQueue.attach(dparm.this_process.local_be_cd)
+
     # reconstitute overrides here.
     test_connections = {}
-    for uid, stuff in channel_overrides.items():
-        _, ser_chan, reading = stuff
-
-        chan = dch.Channel.attach(ser_chan)
-
-        if reading:
-            test_connections[uid] = dconn.Connection(inbound_initializer=chan)
-        else:
-            test_connections[uid] = dconn.Connection(outbound_initializer=chan)
+    for uid, ser_queue in channel_overrides.items():
+        test_connections[uid] = InfraQueue.attach(ser_queue)
 
     the_ctx = dserver.GlobalContext()
 
     try:
-        the_ctx.run_startup(mode=the_ctx.LaunchModes.TEST_STANDALONE_SINGLE, test_gs_stdout=gs_stdout)
+        the_ctx.run_startup(
+            mode=the_ctx.LaunchModes.TEST_STANDALONE_SINGLE,
+            test_gs_stdout=gs_stdout,
+            test_gs_input=gs_input_q,
+            test_ls_inputs=[shep_input_q],
+            test_bela_input=bela_input_q,
+        )
 
         the_ctx.run_global_server(
             mode=the_ctx.LaunchModes.TEST_STANDALONE_SINGLE,
@@ -98,36 +106,35 @@ class GSGroupBaseClass(unittest.TestCase):
         self.mpool = dmm.MemoryPool(self.pool_size, self.pool_name, self.pool_uid, self.pool_prealloc_blocks)
         self.some_parms.inf_pd = B64.bytes_to_str(self.mpool.serialize())
 
-        def mk_handles(cuid):
+        def mk_dqueue_handles(cuid):
             chan = dch.Channel(self.mpool, cuid)
-            rh = dconn.Connection(inbound_initializer=chan)
-            wh = dconn.Connection(outbound_initializer=chan)
-            envser = B64.bytes_to_str(chan.serialize())
-            return chan, rh, wh, envser
+            queue = InfraQueue(pool=self.mpool, main_channel=chan)
+            envser = queue.serialize()
+            return chan, queue, queue, envser
 
-        handles = mk_handles(dfacts.GS_INPUT_CUID)
-        self.gs_input_chan, self.gs_input_rh, self.gs_input_wh, self.some_parms.gs_cd = handles
+        handles = mk_dqueue_handles(dfacts.GS_INPUT_CUID)
+        self.gs_input_chan, self.gs_input_rh, self.gs_input_wh, self.some_parms.gs_qd = handles
 
-        handles = mk_handles(dfacts.BASE_BE_CUID)
+        handles = mk_dqueue_handles(dfacts.BASE_BE_CUID)
         self.bela_input_chan, self.bela_input_rh, self.bela_input_wh, self.some_parms.local_be_cd = handles
 
-        handles = mk_handles(dfacts.BASE_SHEP_CUID)
-        self.shep_input_chan, self.shep_input_rh, self.shep_input_wh, self.some_parms.local_shep_cd = handles
+        handles = mk_dqueue_handles(dfacts.BASE_LS_CUID)
+        self.shep_input_chan, self.shep_input_rh, self.shep_input_wh, self.some_parms.local_ls_qd = handles
 
         self.gs_return_cuid = 17
-        handles = mk_handles(self.gs_return_cuid)
+        handles = mk_dqueue_handles(self.gs_return_cuid)
         (
             self.proc_gs_return_chan,
             self.proc_gs_return_rh,
             self.proc_gs_return_wh,
-            self.some_parms.gs_ret_cd,
+            self.some_parms.gs_ret_qd,
         ) = handles
 
         dapi.test_connection_override(
             test_gs_input=self.gs_input_wh,
             test_gs_return=self.proc_gs_return_rh,
             test_gs_return_cuid=self.gs_return_cuid,
-            test_shep_input=self.shep_input_wh,
+            test_ls_input=self.shep_input_wh,
         )
 
         self.tag = 0
@@ -170,9 +177,7 @@ class GSGroupBaseClass(unittest.TestCase):
     def _start_dut(self):
         test_name = self.__class__.__name__ + "_" + inspect.stack()[1][0].f_code.co_name
 
-        reconst_gs_return_wh = (self.mpool.serialize(), self.proc_gs_return_chan.serialize(), False)
-
-        test_overrides = {self.gs_return_cuid: reconst_gs_return_wh}
+        test_overrides = {self.gs_return_cuid: self.proc_gs_return_wh.serialize()}
 
         the_env_wanted = self.some_parms.env()
 
@@ -185,14 +190,14 @@ class GSGroupBaseClass(unittest.TestCase):
 
         self.dut.start()
 
-        tsu.get_and_check_type(self.shep_input_rh, dmsg.GSPingSH)
+        tsu.get_and_check_type(self.shep_input_rh, dmsg.GSPingLS)
 
-        self.gs_input_wh.send(dmsg.SHPingGS(tag=0, node_sdesc=self.node_sdesc).serialize())
+        self.gs_input_wh.put(dmsg.LSPingGS(tag=0, node_sdesc=self.node_sdesc))
 
         tsu.get_and_check_type(self.bela_input_rh, dmsg.GSIsUp)
 
     def _teardown_dut(self):
-        self.gs_input_wh.send(dmsg.GSTeardown(tag=self.next_tag()).serialize())
+        self.gs_input_wh.put(dmsg.GSTeardown(tag=self.next_tag()))
 
         tsu.get_and_check_type(self.gs_stdout_rh, dmsg.GSHalted)
 
@@ -208,17 +213,17 @@ class GSGroupBaseClass(unittest.TestCase):
             head_proc=True,
         )
 
-        self.gs_input_wh.send(create_msg.serialize())
+        self.gs_input_wh.put(create_msg)
 
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHProcessCreate)
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSProcessCreate)
         self.assertEqual(shep_msg.exe, create_msg.exe)
         self.assertEqual(shep_msg.args, create_msg.args)
 
-        shep_reply_msg = dmsg.SHProcessCreateResponse(
-            tag=0, ref=shep_msg.tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+        shep_reply_msg = dmsg.LSProcessCreateResponse(
+            tag=0, ref=shep_msg.tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_reply_msg = tsu.get_and_check_type(self.bela_input_rh, dmsg.GSProcessCreateResponse)
         self.assertEqual(create_reply_msg.ref, create_msg.tag, "tag-ref mismatch")
@@ -231,9 +236,9 @@ class GSGroupBaseClass(unittest.TestCase):
         dparm.this_process.my_puid = self.head_puid
 
     def _kill_head(self):
-        death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=self.head_puid)
+        death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=self.head_puid)
 
-        self.gs_input_wh.send(death_msg.serialize())
+        self.gs_input_wh.put(death_msg)
 
         tsu.get_and_check_type(self.bela_input_rh, dmsg.GSHeadExit)
 
@@ -248,12 +253,12 @@ class GSGroupBaseClass(unittest.TestCase):
         )
         create_thread.start()
 
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHProcessCreate)
-        shep_reply_msg = dmsg.SHProcessCreateResponse(
-            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSProcessCreate)
+        shep_reply_msg = dmsg.LSProcessCreateResponse(
+            tag=self.next_tag(), ref=shep_msg.tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
         )
 
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
         create_thread.join()
         desc = create_result[0]
@@ -261,69 +266,69 @@ class GSGroupBaseClass(unittest.TestCase):
 
     def _send_get_responses(self, nitems, result):
         if result == "fail":
-            shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessCreate)
+            shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessCreate)
             responses = []
             for i in range(nitems):
                 responses.append(
-                    dmsg.SHProcessCreateResponse(
+                    dmsg.LSProcessCreateResponse(
                         tag=self.next_tag(),
                         ref=shep_msg.procs[i].tag,
-                        err=dmsg.SHProcessCreateResponse.Errors.FAIL,
+                        err=dmsg.LSProcessCreateResponse.Errors.FAIL,
                         err_info="simulated failure",
                     )
                 )
-            shep_reply_msg = dmsg.SHMultiProcessCreateResponse(
+            shep_reply_msg = dmsg.LSMultiProcessCreateResponse(
                 tag=self.next_tag(),
                 ref=shep_msg.tag,
-                err=dmsg.SHMultiProcessCreateResponse.Errors.SUCCESS,
+                err=dmsg.LSMultiProcessCreateResponse.Errors.SUCCESS,
                 responses=responses,
             )
-            self.gs_input_wh.send(shep_reply_msg.serialize())
+            self.gs_input_wh.put(shep_reply_msg)
         elif result == "success":
-            shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessCreate)
+            shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessCreate)
             responses = []
             for i in range(nitems):
                 responses.append(
-                    dmsg.SHProcessCreateResponse(
-                        tag=self.next_tag(), ref=shep_msg.procs[i].tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+                    dmsg.LSProcessCreateResponse(
+                        tag=self.next_tag(), ref=shep_msg.procs[i].tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
                     )
                 )
-            shep_reply_msg = dmsg.SHMultiProcessCreateResponse(
+            shep_reply_msg = dmsg.LSMultiProcessCreateResponse(
                 tag=self.next_tag(),
                 ref=shep_msg.tag,
-                err=dmsg.SHMultiProcessCreateResponse.Errors.SUCCESS,
+                err=dmsg.LSMultiProcessCreateResponse.Errors.SUCCESS,
                 responses=responses,
             )
-            self.gs_input_wh.send(shep_reply_msg.serialize())
+            self.gs_input_wh.put(shep_reply_msg)
         else:
             # we create half failed processes and half successful ones
-            shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessCreate)
+            shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessCreate)
 
             responses = []
             for i in range(0, nitems // 2):
                 responses.append(
-                    dmsg.SHProcessCreateResponse(
-                        tag=self.next_tag(), ref=shep_msg.procs[i].tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+                    dmsg.LSProcessCreateResponse(
+                        tag=self.next_tag(), ref=shep_msg.procs[i].tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
                     )
                 )
 
             for i in range(nitems // 2, nitems):
                 responses.append(
-                    dmsg.SHProcessCreateResponse(
+                    dmsg.LSProcessCreateResponse(
                         tag=self.next_tag(),
                         ref=shep_msg.procs[i].tag,
-                        err=dmsg.SHProcessCreateResponse.Errors.FAIL,
+                        err=dmsg.LSProcessCreateResponse.Errors.FAIL,
                         err_info="simulated failure",
                     )
                 )
 
-            shep_reply_msg = dmsg.SHMultiProcessCreateResponse(
+            shep_reply_msg = dmsg.LSMultiProcessCreateResponse(
                 tag=self.next_tag(),
                 ref=shep_msg.tag,
-                err=dmsg.SHMultiProcessCreateResponse.Errors.SUCCESS,
+                err=dmsg.LSMultiProcessCreateResponse.Errors.SUCCESS,
                 responses=responses,
             )
-            self.gs_input_wh.send(shep_reply_msg.serialize())
+            self.gs_input_wh.put(shep_reply_msg)
 
     def _create_group(self, group_items, group_policy, group_name, existing=False):
         def create_wrap(items, policy, the_name, result_list):
@@ -442,8 +447,8 @@ class GSGroupAPI(GSGroupBaseClass):
                 self.assertEqual(item.desc.name, f"dragon_process_{item.desc.p_uid}")
 
                 # now, kill the process
-                death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=item.uid)
-                self.gs_input_wh.send(death_msg.serialize())
+                death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=item.uid)
+                self.gs_input_wh.put(death_msg)
 
         multi_join(group_puids, join_all=True)
 
@@ -553,7 +558,7 @@ class GSGroupAPI(GSGroupBaseClass):
     def test_create_invalid_members(self):
         n = 10
         # send inappropriate message type
-        process_msg = dmsg.SHProcessCreate(
+        process_msg = dmsg.LSProcessCreate(
             tag=dapi.next_tag(),
             p_uid=dfacts.GS_PUID,
             r_c_uid=dfacts.GS_INPUT_CUID,
@@ -587,26 +592,26 @@ class GSGroupAPI(GSGroupBaseClass):
         kill_thread = threading.Thread(target=kill_wrap, args=(identifier, kill_result))
         kill_thread.start()
 
-        sh_multi_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessKill)
+        sh_multi_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessKill)
 
         responses = []
         for i in range(n):
             responses.append(
-                dmsg.SHProcessKillResponse(
+                dmsg.LSProcessKillResponse(
                     tag=self.next_tag(),
                     ref=sh_multi_kill_msg.procs[i].tag,
-                    err=dmsg.SHProcessKillResponse.Errors.SUCCESS,
+                    err=dmsg.LSProcessKillResponse.Errors.SUCCESS,
                 )
             )
 
-        sh_multi_kill_reply = dmsg.SHMultiProcessKillResponse(
+        sh_multi_kill_reply = dmsg.LSMultiProcessKillResponse(
             tag=self.next_tag(),
             ref=sh_multi_kill_msg.tag,
             responses=responses,
             failed=False,
-            err=dmsg.SHMultiProcessKillResponse.Errors.SUCCESS,
+            err=dmsg.LSMultiProcessKillResponse.Errors.SUCCESS,
         )
-        self.gs_input_wh.send(sh_multi_kill_reply.serialize())
+        self.gs_input_wh.put(sh_multi_kill_reply)
 
         kill_thread.join()
         return kill_result[0]
@@ -668,30 +673,30 @@ class GSGroupAPI(GSGroupBaseClass):
         destroy_thread = threading.Thread(target=destroy_wrap, args=(identifier, destroy_result))
         destroy_thread.start()
 
-        sh_multi_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessKill)
+        sh_multi_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessKill)
 
         responses = []
         for i in range(n):
             responses.append(
-                dmsg.SHProcessKillResponse(
+                dmsg.LSProcessKillResponse(
                     tag=self.next_tag(),
                     ref=sh_multi_kill_msg.procs[i].tag,
-                    err=dmsg.SHProcessKillResponse.Errors.SUCCESS,
+                    err=dmsg.LSProcessKillResponse.Errors.SUCCESS,
                 )
             )
 
-        sh_multi_kill_reply = dmsg.SHMultiProcessKillResponse(
+        sh_multi_kill_reply = dmsg.LSMultiProcessKillResponse(
             tag=self.next_tag(),
             ref=sh_multi_kill_msg.tag,
             responses=responses,
             failed=False,
-            err=dmsg.SHMultiProcessKillResponse.Errors.SUCCESS,
+            err=dmsg.LSMultiProcessKillResponse.Errors.SUCCESS,
         )
-        self.gs_input_wh.send(sh_multi_kill_reply.serialize())
+        self.gs_input_wh.put(sh_multi_kill_reply)
 
         for item in sets:
-            death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=item.uid)
-            self.gs_input_wh.send(death_msg.serialize())
+            death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=item.uid)
+            self.gs_input_wh.put(death_msg)
 
         destroy_thread.join()
         return destroy_result[0]
@@ -729,8 +734,8 @@ class GSGroupAPI(GSGroupBaseClass):
 
         # now, actually kill the processes
         for item in descr.sets[0]:
-            death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=item.uid)
-            self.gs_input_wh.send(death_msg.serialize())
+            death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=item.uid)
+            self.gs_input_wh.put(death_msg)
 
         # destroy an existing group of resources
         descr = destroy("bob")
@@ -771,21 +776,21 @@ class GSGroupAPI(GSGroupBaseClass):
         self.assertEqual(int(descr.state), GroupDescriptor.State.ACTIVE)
 
     def _send_responses(self, nitems):
-        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessCreate)
+        shep_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessCreate)
         responses = []
         for i in range(nitems):
             responses.append(
-                dmsg.SHProcessCreateResponse(
-                    tag=self.next_tag(), ref=shep_msg.procs[i].tag, err=dmsg.SHProcessCreateResponse.Errors.SUCCESS
+                dmsg.LSProcessCreateResponse(
+                    tag=self.next_tag(), ref=shep_msg.procs[i].tag, err=dmsg.LSProcessCreateResponse.Errors.SUCCESS
                 )
             )
-        shep_reply_msg = dmsg.SHMultiProcessCreateResponse(
+        shep_reply_msg = dmsg.LSMultiProcessCreateResponse(
             tag=self.next_tag(),
             ref=shep_msg.tag,
-            err=dmsg.SHMultiProcessCreateResponse.Errors.SUCCESS,
+            err=dmsg.LSMultiProcessCreateResponse.Errors.SUCCESS,
             responses=responses,
         )
-        self.gs_input_wh.send(shep_reply_msg.serialize())
+        self.gs_input_wh.put(shep_reply_msg)
 
     def test_create_add_to(self):
         # first create a group
@@ -937,26 +942,26 @@ class GSGroupAPI(GSGroupBaseClass):
             remove_from(descr.g_uid, [descr.sets[0][0].uid, "rand1", "rand2"])
 
     def _send_kill_messages(self, n):
-        sh_multi_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.SHMultiProcessKill)
+        sh_multi_kill_msg = tsu.get_and_check_type(self.shep_input_rh, dmsg.LSMultiProcessKill)
 
         responses = []
         for i in range(n):
             responses.append(
-                dmsg.SHProcessKillResponse(
+                dmsg.LSProcessKillResponse(
                     tag=self.next_tag(),
                     ref=sh_multi_kill_msg.procs[i].tag,
-                    err=dmsg.SHProcessKillResponse.Errors.SUCCESS,
+                    err=dmsg.LSProcessKillResponse.Errors.SUCCESS,
                 )
             )
 
-        sh_multi_kill_reply = dmsg.SHMultiProcessKillResponse(
+        sh_multi_kill_reply = dmsg.LSMultiProcessKillResponse(
             tag=self.next_tag(),
             ref=sh_multi_kill_msg.tag,
             responses=responses,
             failed=False,
-            err=dmsg.SHMultiProcessKillResponse.Errors.SUCCESS,
+            err=dmsg.LSMultiProcessKillResponse.Errors.SUCCESS,
         )
-        self.gs_input_wh.send(sh_multi_kill_reply.serialize())
+        self.gs_input_wh.put(sh_multi_kill_reply)
 
     def test_destroy_remove_from(self):
         # first create a group
@@ -1025,8 +1030,8 @@ class GSGroupAPI(GSGroupBaseClass):
 
         # kill all the procs that belong to the group without letting the group know
         for item in puids_list:
-            death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=item)
-            self.gs_input_wh.send(death_msg.serialize())
+            death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=item)
+            self.gs_input_wh.put(death_msg)
 
         # and now try to remove them from the group
         descr1 = destroy_remove_from(descr.g_uid, puids_list)
@@ -1052,8 +1057,8 @@ class GSGroupAPI(GSGroupBaseClass):
 
         # kill some of the procs that belong to the group without letting the group know
         for item in puids_list[: n - 2]:
-            death_msg = dmsg.SHProcessExit(tag=self.next_tag(), p_uid=item)
-            self.gs_input_wh.send(death_msg.serialize())
+            death_msg = dmsg.LSProcessExit(tag=self.next_tag(), p_uid=item)
+            self.gs_input_wh.put(death_msg)
 
         kill_thread = threading.Thread(target=self._send_kill_messages, args=(1,))
         kill_thread.start()

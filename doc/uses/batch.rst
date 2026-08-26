@@ -20,7 +20,7 @@ you need to:
 * Run large numbers of small function tasks with higher throughput.
 * Let Dragon schedule around dependencies efficiently, prioritize the critical path, place tasks near their data, and make intelligent MPI placement decisions.
 
-For simpler parallel-map patterns, :ref:`tutorial1` shows how ``Pool.map`` may be sufficient.
+For simpler parallel-map patterns, `Python multiprocessing <https://docs.python.org/3/library/multiprocessing.html>`_ shows how ``Pool.map`` may be sufficient.
 
 A Simple Batch Example
 ======================

@@ -320,6 +320,9 @@ dragon_fli_full(const dragonFLIDescr_t* adapter);
 dragonError_t
 dragon_fli_num_msgs(const dragonFLIDescr_t* adapter, size_t* num_msgs, const timespec_t* timeout);
 
+dragonError_t
+dragon_fli_main_channel_cuid(const dragonFLIDescr_t* adapter, dragonC_UID_t* cuid);
+
 #ifdef __cplusplus
 }
 #endif
