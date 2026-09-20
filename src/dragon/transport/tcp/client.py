@@ -26,7 +26,6 @@ from .task import TaskMixin, run_forever
 from .transport import Address, Transport
 from .util import create_msg
 
-
 LOGGER = logging.getLogger("dragon.transport.tcp.client")
 
 
