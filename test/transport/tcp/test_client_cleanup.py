@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 import unittest
 from unittest.mock import Mock, patch
@@ -6,10 +7,21 @@ from unittest.mock import Mock, patch
 from dragon.channels import Channel, EventType, discard_gateways, register_gateways_from_env
 from dragon.managed_memory import MemoryPool
 from dragon.transport.tcp.client import Client
-from dragon.transport.tcp.messages import EventRequest, EventResponse
+from dragon.transport.tcp.errno import DRAGON_FAILURE
+from dragon.transport.tcp.messages import ErrorResponse, EventRequest, EventResponse
 from dragon.transport.tcp.server import Server
 from dragon.transport.tcp.transport import LOOPBACK_ADDRESS_IPv4, Transport
 from dragon.utils import B64
+
+
+def setUpModule():
+    """Disable logging while running these tests."""
+    logging.disable()
+
+
+def tearDownModule():
+    """Re-enable logging after running these tests."""
+    logging.disable(logging.NOTSET)
 
 
 class ClientCleanupTests(unittest.IsolatedAsyncioTestCase):
@@ -77,6 +89,40 @@ class ClientCleanupTests(unittest.IsolatedAsyncioTestCase):
         # The queued request owns a descriptor copy and can still be handled.
         await self.server.handle_request(request, address)
         request._io_event.set()
+
+    async def test_cleanup_error_response_completes_and_releases_event(self):
+        # The server only responds to a cleanup request when it fails to handle
+        # it. Run the request through Server.process() so the ErrorResponse and
+        # the request I/O event are produced in production order.
+        baseline = self.pool.get_allocations().num_allocs
+        task, request, address, future = await self.make_cleanup()
+        key = (request.channel_sd, EventRequest)
+        self.server._requests[key].put_nowait((request, address))
+        with patch("dragon.transport.tcp.server.poll_channel", side_effect=RuntimeError("cannot poll")):
+            self.tasks.append(asyncio.create_task(self.server.process(key)))
+            await asyncio.wait_for(asyncio.shield(task), 2)
+        response, _ = future.result()
+        self.assertIsInstance(response, ErrorResponse)
+        self.assertEqual(response.errno, DRAGON_FAILURE)
+        self.assertTrue(response._io_event.is_set())
+        self.assertFalse(self.transport._responses)
+        self.assertEqual(self.pool.get_allocations().num_allocs, baseline)
+
+    async def test_unroutable_cleanup_completes_with_error_without_blocking(self):
+        # Client.run() error-completes and destroys a gateway message when
+        # process() fails, e.g., before the node map includes the local host.
+        # No native caller waits on a cleanup notification, so completing it
+        # must not block on the gateway completion handshake.
+        baseline = self.pool.get_allocations().num_allocs
+        channel = Channel(self.pool, 2)
+        channel.notify_on_destroy()
+        channel.destroy()
+        event = await asyncio.wait_for(self.client.recv(), 2)
+        with self.assertRaises(ValueError):
+            self.client.process(event)
+        await asyncio.wait_for(asyncio.to_thread(event.error_complete, DRAGON_FAILURE), 2)
+        event.destroy()
+        self.assertEqual(self.pool.get_allocations().num_allocs, baseline)
 
     async def test_ordinary_event_still_waits_for_response(self):
         event = Mock(is_event_kind=True, event_mask=EventType.POLLIN)
