@@ -30,11 +30,6 @@ from .util import create_msg
 LOGGER = logging.getLogger("dragon.transport.tcp.client")
 
 
-# Used to ignore channel cleanup events.
-async def noop_coroutine():
-    pass
-
-
 class Client(TaskMixin):
     """Attaches to channel, receives gateway messages, and processes requests
     with the corresponding transport server.
@@ -146,12 +141,6 @@ class Client(TaskMixin):
             raise ValueError(f"Unknown target host ID: {msg.target_hostid}")
         # Create Request from gateway message
         req = create_request(msg)
-        if req is None:
-            # This would have been a channel cleanup request which is
-            # ignored in the Python TCP transport.
-            msg.destroy()
-            return asyncio.create_task(noop_coroutine())
-
         # Send request
         fut = self.transport.write_request(req, to_addr)
         # Handle responses asynchronously. Ordering of responses is
