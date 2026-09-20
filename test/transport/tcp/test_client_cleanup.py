@@ -49,7 +49,7 @@ class ClientCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.gateway.destroy()
         self.pool.destroy()
 
-    async def make_cleanup(self):
+    async def make_cleanup(self, start_task=True):
         channel = Channel(self.pool, 2)
         channel.notify_on_destroy()
         channel.destroy()
@@ -60,7 +60,8 @@ class ClientCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.tasks.append(task)
         request, address = await self.transport.read_request()
         future = self.transport._responses[request.seqno]
-        await asyncio.sleep(0)
+        if start_task:
+            await asyncio.sleep(0)
         self.assertFalse(task.done())
         return task, request, address, future
 
@@ -105,6 +106,40 @@ class ClientCleanupTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(response, ErrorResponse)
         self.assertEqual(response.errno, DRAGON_FAILURE)
         self.assertTrue(response._io_event.is_set())
+        self.assertFalse(self.transport._responses)
+        self.assertEqual(self.pool.get_allocations().num_allocs, baseline)
+
+    async def test_cleanup_cancelled_before_start_releases_event_and_response_entry(self):
+        baseline = self.pool.get_allocations().num_allocs
+        task, request, address, future = await self.make_cleanup(start_task=False)
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(future.cancelled())
+        self.assertFalse(self.transport._responses)
+        self.assertEqual(self.pool.get_allocations().num_allocs, baseline)
+        await self.server.handle_request(request, address)
+        request._io_event.set()
+
+    async def test_cancelled_cleanup_logs_late_error_response(self):
+        baseline = self.pool.get_allocations().num_allocs
+        task, request, address, future = await self.make_cleanup()
+        task.cancel()
+        with self.assertRaises(asyncio.CancelledError):
+            await task
+        self.assertTrue(future.cancelled())
+        self.assertFalse(self.transport._responses)
+        self.assertEqual(self.pool.get_allocations().num_allocs, baseline)
+
+        key = (request.channel_sd, EventRequest)
+        self.server._requests[key].put_nowait((request, address))
+        with (
+            patch("dragon.transport.tcp.server.poll_channel", side_effect=RuntimeError("cannot poll")),
+            patch("dragon.transport.tcp.transport.LOGGER.warning") as warning,
+        ):
+            self.tasks.append(asyncio.create_task(self.server.process(key)))
+            await asyncio.wait_for(request._io_event.wait(), 2)
+        self.assertTrue(any("cannot poll" in str(call) for call in warning.call_args_list))
         self.assertFalse(self.transport._responses)
         self.assertEqual(self.pool.get_allocations().num_allocs, baseline)
 

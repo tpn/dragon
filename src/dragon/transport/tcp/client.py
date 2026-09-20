@@ -145,29 +145,36 @@ class Client(TaskMixin):
         # Handle responses asynchronously. Ordering of responses is
         # intentionally not guaranteed since the remote server is expected to
         # process requests in the order they are received.
-        return asyncio.create_task(self.wait_for_response(fut, msg, req))
+        task = asyncio.create_task(self.wait_for_response(fut, msg, req))
+        if msg.is_event_kind and msg.event_mask == EventType.CHANNEL_CLEANUP:
+            # A task cancelled before its first execution never enters the
+            # coroutine's finally block. Register cleanup before returning it.
+            def finish_cleanup(task):
+                self.transport.cancel_response(req.seqno)
+                try:
+                    msg.event_complete(0)
+                finally:
+                    msg.destroy()
+
+            task.add_done_callback(finish_cleanup)
+        return task
 
     async def wait_for_response(self, fut: asyncio.Future, msg: GatewayMessage, req: Request) -> None:
         if msg.is_event_kind and msg.event_mask == EventType.CHANNEL_CLEANUP:
             # The server sends no response to cleanup requests. The request
             # owns its serialized channel descriptor, so release the gateway
             # after request I/O without waiting for a response or native caller.
-            try:
-                await req._io_event.wait()
-                if fut.done() and not fut.cancelled():
-                    # The server only responds to a cleanup request when it
-                    # fails to handle it, i.e., with an ErrorResponse.
-                    resp, addr = fut.result()
-                    try:
-                        await self.handle_response(resp, addr, msg)
-                    except BaseException:
-                        LOGGER.exception(f"Error handling response to gateway message: {msg}")
-                    finally:
-                        resp._io_event.set()
-            finally:
-                self.transport.cancel_response(req.seqno)
-                msg.event_complete(0)
-                msg.destroy()
+            await req._io_event.wait()
+            if fut.done() and not fut.cancelled():
+                # The server only responds to a cleanup request when it
+                # fails to handle it, i.e., with an ErrorResponse.
+                resp, addr = fut.result()
+                try:
+                    await self.handle_response(resp, addr, msg)
+                except BaseException:
+                    LOGGER.exception(f"Error handling response to gateway message: {msg}")
+                finally:
+                    resp._io_event.set()
             return
 
         try:
