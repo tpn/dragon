@@ -161,9 +161,7 @@ class Client(TaskMixin):
                     finally:
                         resp._io_event.set()
             finally:
-                self.transport._responses.pop(req.seqno, None)
-                if not fut.done():
-                    fut.cancel()
+                self.transport.cancel_response(req.seqno)
                 msg.event_complete(0)
                 msg.destroy()
             return
