@@ -155,9 +155,13 @@ class Client(TaskMixin):
             try:
                 await req._io_event.wait()
                 if fut.done() and not fut.cancelled():
+                    # The server only responds to a cleanup request when it
+                    # fails to handle it, i.e., with an ErrorResponse.
                     resp, addr = fut.result()
                     try:
                         await self.handle_response(resp, addr, msg)
+                    except BaseException:
+                        LOGGER.exception(f"Error handling response to gateway message: {msg}")
                     finally:
                         resp._io_event.set()
             finally:
